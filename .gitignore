@@ -12,7 +12,7 @@ pnpm-debug.log*
 !.env.production
 
 # Claude specific directories
-.claude/
+# .claude/
 
 # Data directory (contains sensitive information)
 data/
@@ -238,7 +238,7 @@ web/apiStats/
 web/admin-spa/dist/
 
 # Development tools and IDE extensions
-.bmad-core/
+# .bmad-core/
 .cursor/
 .roomodes
 .trae/

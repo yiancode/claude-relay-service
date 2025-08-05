@@ -155,6 +155,7 @@ npm run setup  # 自动生成密钥并创建管理员账户
 - 运行 `npm test` 执行测试套件（Jest + SuperTest 配置）
 - 在修改核心服务后，使用 CLI 工具验证功能：`npm run cli status`
 - 检查日志文件 `logs/claude-relay-*.log` 确认服务正常运行
+- 使用健康检查端点验证服务状态：`curl http://localhost:3000/health`
 - 注意：当前项目缺少实际测试文件，建议补充单元测试和集成测试
 
 ### 开发工作流
@@ -223,6 +224,25 @@ npm run cli accounts refresh <accountId>
 # 管理员操作
 npm run cli admin create -- --username admin2
 npm run cli admin reset-password -- --username admin
+
+# 数据管理和迁移
+npm run data:export                # 导出数据
+npm run data:import                # 导入数据
+npm run data:export:sanitized      # 导出脱敏数据
+npm run migrate:apikey-expiry      # 迁移 API Key 过期时间
+npm run migrate:fix-usage-stats    # 修复使用统计数据
+
+# 服务管理
+npm run service:start:daemon       # 后台启动服务
+npm run service:status             # 查看服务状态
+npm run service:logs               # 查看服务日志
+npm run service:restart:daemon     # 重启服务
+npm run service:stop               # 停止服务
+
+# Docker 部署
+npm run docker:build              # 构建 Docker 镜像
+npm run docker:up                 # 启动 Docker 容器
+npm run docker:down               # 停止 Docker 容器
 ```
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
