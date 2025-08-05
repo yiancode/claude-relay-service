@@ -154,6 +154,18 @@ class ClaudeRelayService {
           // 提取限流重置时间戳
           if (response.headers && response.headers['anthropic-ratelimit-unified-reset']) {
             rateLimitResetTimestamp = parseInt(response.headers['anthropic-ratelimit-unified-reset']);
+            const currentTime = Date.now();
+            const resetTimeAsSeconds = new Date(rateLimitResetTimestamp * 1000);
+            const resetTimeAsMillis = new Date(rateLimitResetTimestamp);
+            
+            logger.warn(`🔍 DEBUG: Rate limit timestamp analysis:`);
+            logger.warn(`  Raw timestamp: ${rateLimitResetTimestamp}`);
+            logger.warn(`  Current time: ${currentTime} (${new Date(currentTime).toISOString()})`);
+            logger.warn(`  If seconds (*1000): ${resetTimeAsSeconds.toISOString()}`);
+            logger.warn(`  If milliseconds: ${resetTimeAsMillis.toISOString()}`);
+            logger.warn(`  Seconds until reset (if seconds): ${Math.round((resetTimeAsSeconds.getTime() - currentTime) / 1000 / 60)} minutes`);
+            logger.warn(`  Seconds until reset (if millis): ${Math.round((resetTimeAsMillis.getTime() - currentTime) / 1000 / 60)} minutes`);
+            
             logger.info(`🕐 Extracted rate limit reset timestamp: ${rateLimitResetTimestamp} (${new Date(rateLimitResetTimestamp * 1000).toISOString()})`);
           }
         } else {
@@ -855,6 +867,18 @@ class ClaudeRelayService {
             let rateLimitResetTimestamp = null;
             if (res.headers && res.headers['anthropic-ratelimit-unified-reset']) {
               rateLimitResetTimestamp = parseInt(res.headers['anthropic-ratelimit-unified-reset']);
+              const currentTime = Date.now();
+              const resetTimeAsSeconds = new Date(rateLimitResetTimestamp * 1000);
+              const resetTimeAsMillis = new Date(rateLimitResetTimestamp);
+              
+              logger.warn(`🔍 DEBUG: Stream rate limit timestamp analysis:`);
+              logger.warn(`  Raw timestamp: ${rateLimitResetTimestamp}`);
+              logger.warn(`  Current time: ${currentTime} (${new Date(currentTime).toISOString()})`);
+              logger.warn(`  If seconds (*1000): ${resetTimeAsSeconds.toISOString()}`);
+              logger.warn(`  If milliseconds: ${resetTimeAsMillis.toISOString()}`);
+              logger.warn(`  Minutes until reset (if seconds): ${Math.round((resetTimeAsSeconds.getTime() - currentTime) / 1000 / 60)} minutes`);
+              logger.warn(`  Minutes until reset (if millis): ${Math.round((resetTimeAsMillis.getTime() - currentTime) / 1000 / 60)} minutes`);
+              
               logger.info(`🕐 Extracted rate limit reset timestamp from stream: ${rateLimitResetTimestamp} (${new Date(rateLimitResetTimestamp * 1000).toISOString()})`);
             }
             

@@ -236,3 +236,10 @@ web/apiStats/
 
 # Admin SPA build files
 web/admin-spa/dist/
+
+# Development tools and IDE extensions
+.bmad-core/
+.cursor/
+.roomodes
+.trae/
+web-bundles/
