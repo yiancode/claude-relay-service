@@ -1117,6 +1117,32 @@ router.post('/claude-accounts/:accountId/refresh', authenticateAdmin, async (req
   }
 });
 
+// 测试Claude账户限流状态
+router.post('/claude-accounts/:accountId/test-rate-limit', authenticateAdmin, async (req, res) => {
+  try {
+    const { accountId } = req.params;
+    
+    const result = await claudeAccountService.testRateLimit(accountId);
+    
+    logger.info(`🧪 Admin tested rate limit for Claude account: ${accountId} - ${result.isRateLimited ? 'Still limited' : 'No longer limited'}`);
+    res.json({ 
+      success: true, 
+      isRateLimited: result.isRateLimited,
+      minutesRemaining: result.minutesRemaining || 0,
+      message: result.isRateLimited 
+        ? `账户仍被限流，剩余 ${result.minutesRemaining || 0} 分钟`
+        : '账户已恢复正常，限流状态已清除'
+    });
+  } catch (error) {
+    logger.error('❌ Failed to test rate limit for Claude account:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to test rate limit', 
+      message: error.message 
+    });
+  }
+});
+
 // 切换Claude账户调度状态
 router.put('/claude-accounts/:accountId/toggle-schedulable', authenticateAdmin, async (req, res) => {
   try {

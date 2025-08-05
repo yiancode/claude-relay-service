@@ -781,19 +781,14 @@ class ClaudeAccountService {
         const windowData = await this.updateSessionWindow(accountId, updatedAccountData);
         Object.assign(updatedAccountData, windowData);
         
-        // 限流结束时间 = 会话窗口结束时间
-        if (updatedAccountData.sessionWindowEnd) {
-          updatedAccountData.rateLimitEndAt = updatedAccountData.sessionWindowEnd;
-          const windowEnd = new Date(updatedAccountData.sessionWindowEnd);
-          const now = new Date();
-          const minutesUntilEnd = Math.ceil((windowEnd - now) / (1000 * 60));
-          logger.warn(`🚫 Account marked as rate limited until estimated session window ends: ${accountData.name} (${accountId}) - ${minutesUntilEnd} minutes remaining`);
-        } else {
-          // 如果没有会话窗口，使用默认1小时（兼容旧逻辑）
-          const oneHourLater = new Date(Date.now() + 60 * 60 * 1000);
-          updatedAccountData.rateLimitEndAt = oneHourLater.toISOString();
-          logger.warn(`🚫 Account marked as rate limited (1 hour default): ${accountData.name} (${accountId})`);
-        }
+        // 限流结束时间 = 当前时间 + 3小时（Claude API 的实际限流时间）
+        const threeHoursLater = new Date(Date.now() + 3 * 60 * 60 * 1000);
+        updatedAccountData.rateLimitEndAt = threeHoursLater.toISOString();
+        const minutesUntilEnd = Math.ceil((threeHoursLater - new Date()) / (1000 * 60));
+        logger.warn(`🚫 Account marked as rate limited (3 hours): ${accountData.name} (${accountId}) - ${minutesUntilEnd} minutes remaining until ${threeHoursLater.toISOString()}`);
+        
+        // 注意：会话窗口和限流时间是不同的概念
+        // 会话窗口（5小时）用于调度，限流时间（3小时）用于API访问限制
       }
       
       await redis.setClaudeAccount(accountId, updatedAccountData);
@@ -1122,6 +1117,115 @@ class ClaudeAccountService {
         noWindows: 0,
         error: error.message
       };
+    }
+  }
+
+  // 🧪 测试限流状态
+  async testRateLimit(accountId) {
+    try {
+      const accountData = await redis.getClaudeAccount(accountId);
+      if (!accountData || Object.keys(accountData).length === 0) {
+        throw new Error('Account not found');
+      }
+
+      // 检查当前限流状态
+      const rateLimitInfo = await this.getRateLimitInfo(accountId);
+      if (!rateLimitInfo.isRateLimited) {
+        // 如果已经不被限流，直接返回
+        return {
+          isRateLimited: false,
+          minutesRemaining: 0,
+          message: '账户当前未被限流'
+        };
+      }
+
+      // 获取有效的访问令牌
+      const accessToken = await this.getValidAccessToken(accountId);
+      if (!accessToken) {
+        throw new Error('Unable to get valid access token');
+      }
+
+      // 创建代理配置
+      let httpsAgent = null;
+      if (accountData.proxy) {
+        const proxyConfig = JSON.parse(accountData.proxy);
+        if (proxyConfig.type === 'socks5') {
+          httpsAgent = new SocksProxyAgent({
+            hostname: proxyConfig.host,
+            port: proxyConfig.port,
+            username: proxyConfig.username || undefined,
+            password: proxyConfig.password || undefined
+          });
+        } else if (proxyConfig.type === 'http') {
+          httpsAgent = new HttpsProxyAgent({
+            hostname: proxyConfig.host,
+            port: proxyConfig.port,
+            username: proxyConfig.username || undefined,
+            password: proxyConfig.password || undefined
+          });
+        }
+      }
+
+      // 发送轻量级测试请求到Claude API
+      const testResponse = await axios.post(
+        'https://api.anthropic.com/v1/messages',
+        {
+          model: 'claude-3-haiku-20240307',
+          max_tokens: 10,
+          messages: [
+            {
+              role: 'user',
+              content: 'Hi'
+            }
+          ]
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'anthropic-version': '2023-06-01'
+          },
+          httpsAgent,
+          timeout: 10000
+        }
+      );
+
+      // 如果请求成功，说明不再被限流
+      if (testResponse.status === 200) {
+        logger.info(`🎉 Rate limit test successful for account ${accountData.name} (${accountId}) - clearing rate limit status`);
+        
+        // 清除限流状态
+        await this.clearRateLimit(accountId);
+        
+        // 重新计算会话窗口
+        await this.updateSessionWindow(accountId);
+        
+        return {
+          isRateLimited: false,
+          minutesRemaining: 0,
+          message: '测试成功：账户已恢复正常'
+        };
+      } else {
+        // 不应该到这里，但以防万一
+        return rateLimitInfo;
+      }
+
+    } catch (error) {
+      // 检查错误类型
+      if (error.response && error.response.status === 429) {
+        // 仍然被限流
+        const rateLimitInfo = await this.getRateLimitInfo(accountId);
+        logger.info(`⏳ Rate limit test confirmed account ${accountId} is still limited - ${rateLimitInfo.minutesRemaining} minutes remaining`);
+        return {
+          isRateLimited: true,
+          minutesRemaining: rateLimitInfo.minutesRemaining,
+          message: `账户仍被限流，剩余 ${rateLimitInfo.minutesRemaining} 分钟`
+        };
+      } else {
+        // 其他错误
+        logger.error(`❌ Rate limit test failed for account ${accountId}:`, error.message);
+        throw new Error(`测试失败: ${error.message}`);
+      }
     }
   }
 }

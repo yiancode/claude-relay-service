@@ -430,6 +430,26 @@
                     <span class="ml-1">刷新</span>
                   </button>
                   <button 
+                    v-if="account.platform === 'claude' && (account.rateLimitStatus && account.rateLimitStatus.isRateLimited)"
+                    :disabled="testingRateLimits[account.id]"
+                    :class="[
+                      'px-2.5 py-1 rounded text-xs font-medium transition-colors',
+                      testingRateLimits[account.id] 
+                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                        : 'bg-orange-100 text-orange-700 hover:bg-orange-200'
+                    ]"
+                    :title="testingRateLimits[account.id] ? '测试中...' : '测试账户是否仍被限流'"
+                    @click="testRateLimit(account)"
+                  >
+                    <i
+                      :class="[
+                        'fas fa-vial',
+                        testingRateLimits[account.id] ? 'animate-pulse' : ''
+                      ]"
+                    />
+                    <span class="ml-1">{{ testingRateLimits[account.id] ? '测试中' : '测试' }}</span>
+                  </button>
+                  <button 
                     :disabled="account.isTogglingSchedulable"
                     :class="[
                       'px-2.5 py-1 rounded text-xs font-medium transition-colors',
@@ -633,6 +653,16 @@
             </button>
             
             <button 
+              v-if="account.platform === 'claude' && (account.rateLimitStatus && account.rateLimitStatus.isRateLimited)"
+              class="flex-1 px-3 py-2 text-xs text-orange-600 bg-orange-50 rounded-lg hover:bg-orange-100 transition-colors flex items-center justify-center gap-1"
+              :disabled="testingRateLimits[account.id]"
+              @click="testRateLimit(account)"
+            >
+              <i :class="['fas fa-vial', { 'animate-pulse': testingRateLimits[account.id] }]" />
+              {{ testingRateLimits[account.id] ? '测试中' : '测试' }}
+            </button>
+            
+            <button 
               class="flex-1 px-3 py-2 text-xs rounded-lg transition-colors flex items-center justify-center gap-1"
               :class="account.schedulable 
                 ? 'text-gray-600 bg-gray-50 hover:bg-gray-100' 
@@ -711,6 +741,7 @@ const accountsSortBy = ref('')
 const accountsSortOrder = ref('asc')
 const apiKeys = ref([])
 const refreshingTokens = ref({})
+const testingRateLimits = ref({}) // 新增：测试限流状态管理
 const accountGroups = ref([])
 const groupFilter = ref('all')
 const filteredAccounts = ref([])
@@ -1177,6 +1208,37 @@ const refreshAccountToken = async (account) => {
 // 切换调度状态
 const toggleDispatch = async (account) => {
   await toggleSchedulable(account)
+}
+
+// 测试限流状态
+const testRateLimit = async (account) => {
+  // 防止重复请求
+  if (testingRateLimits.value[account.id]) return
+  
+  try {
+    // 使用响应式状态管理
+    testingRateLimits.value[account.id] = true
+    
+    const data = await apiClient.post(`/admin/claude-accounts/${account.id}/test-rate-limit`)
+    
+    if (data.success) {
+      if (data.isRateLimited === false) {
+        showToast('测试成功：账户已恢复正常，限流状态已清除', 'success')
+        // 重新加载账户列表以显示最新状态
+        await loadAccounts()
+      } else {
+        showToast(`测试完成：账户仍被限流，剩余 ${data.minutesRemaining || 0} 分钟`, 'warning')
+      }
+    } else {
+      showToast(data.message || '测试失败', 'error')
+    }
+  } catch (error) {
+    console.error('Rate limit test failed:', error)
+    showToast('测试请求失败', 'error')
+  } finally {
+    // 清理状态
+    delete testingRateLimits.value[account.id]
+  }
 }
 
 // 监听排序选择变化

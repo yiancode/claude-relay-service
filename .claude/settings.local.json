@@ -5,7 +5,12 @@
       "Bash(git add:*)",
       "Bash(claude mcp add playwright:*)",
       "Bash(git commit:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_snapshot",
+      "mcp__playwright__browser_type",
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_wait_for"
     ],
     "deny": []
   }
