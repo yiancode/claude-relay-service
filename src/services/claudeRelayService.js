@@ -571,7 +571,7 @@ class ClaudeRelayService {
       }
 
       req.on('error', (error) => {
-        console.error(": ❌ ", error);
+        console.error(': ❌ ', error);
         logger.error('❌ Claude API request error:', error.message, {
           code: error.code,
           errno: error.errno,
@@ -736,7 +736,7 @@ class ClaudeRelayService {
           });
           
           res.on('end', () => {
-            console.error(": ❌ ", errorData);
+            console.error(': ❌ ', errorData);
             logger.error('❌ Claude API error response:', errorData);
             if (!responseStream.destroyed) {
               // 发送错误事件
