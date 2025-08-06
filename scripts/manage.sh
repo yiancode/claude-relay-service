@@ -555,11 +555,11 @@ update_service() {
         print_error "服务未安装，请先运行: $0 install"
         return 1
     fi
-    
+
     print_info "更新 Claude Relay Service..."
-    
+
     cd "$APP_DIR"
-    
+
     # 保存当前运行状态
     local was_running=false
     if pgrep -f "node.*src/app.js" > /dev/null; then
@@ -567,7 +567,7 @@ update_service() {
         print_info "检测到服务正在运行，将在更新后自动重启..."
         stop_service
     fi
-    
+
     # 备份配置文件
     print_info "备份配置文件..."
     if [ -f ".env" ]; then
@@ -576,39 +576,39 @@ update_service() {
     if [ -f "config/config.js" ]; then
         cp config/config.js config/config.js.backup.$(date +%Y%m%d%H%M%S)
     fi
-    
+
     # 拉取最新代码
     print_info "拉取最新代码..."
     if ! git pull origin main; then
         print_error "拉取代码失败，请检查网络连接"
         return 1
     fi
-    
+
     # 更新依赖
     print_info "更新依赖..."
     npm install
-    
+
     # 确保脚本有执行权限
     if [ -f "$APP_DIR/scripts/manage.sh" ]; then
         chmod +x "$APP_DIR/scripts/manage.sh"
     fi
-    
+
     # 获取最新的预构建前端文件
     print_info "更新前端文件..."
-    
+
     # 创建目标目录
     mkdir -p web/admin-spa/dist
-    
+
     # 清理旧的前端文件
     rm -rf web/admin-spa/dist/*
-    
+
     # 从 web-dist 分支获取构建好的文件
     if git ls-remote --heads origin web-dist | grep -q web-dist; then
         print_info "从 web-dist 分支下载最新前端文件..."
-        
+
         # 创建临时目录用于 clone
         TEMP_CLONE_DIR=$(mktemp -d)
-        
+
         # 使用 sparse-checkout 来只获取需要的文件
         git clone --depth 1 --branch web-dist --single-branch \
             https://github.com/Wei-Shaw/claude-relay-service.git \
@@ -617,7 +617,7 @@ update_service() {
             REPO_URL=$(git config --get remote.origin.url)
             git clone --depth 1 --branch web-dist --single-branch "$REPO_URL" "$TEMP_CLONE_DIR"
         }
-        
+
         # 复制文件到目标目录（排除 .git 和 README.md）
         rsync -av --exclude='.git' --exclude='README.md' "$TEMP_CLONE_DIR/" web/admin-spa/dist/ 2>/dev/null || {
             # 如果没有 rsync，使用 cp
@@ -625,14 +625,14 @@ update_service() {
             rm -rf web/admin-spa/dist/.git 2>/dev/null
             rm -f web/admin-spa/dist/README.md 2>/dev/null
         }
-        
+
         # 清理临时目录
         rm -rf "$TEMP_CLONE_DIR"
-        
+
         print_success "前端文件更新完成"
     else
         print_warning "web-dist 分支不存在，尝试本地构建..."
-        
+
         # 检查是否有 Node.js 和 npm
         if command_exists npm; then
             # 回退到原始构建方式
@@ -651,18 +651,18 @@ update_service() {
             print_info "请确保仓库已正确配置 web-dist 分支"
         fi
     fi
-    
+
     # 更新软链接到最新版本
     create_symlink
-    
+
     # 如果之前在运行，则重新启动服务
     if [ "$was_running" = true ]; then
         print_info "重新启动服务..."
         start_service
     fi
-    
+
     print_success "更新完成！"
-    
+
     # 显示版本信息
     if [ -f "$APP_DIR/VERSION" ]; then
         echo -e "\n当前版本: ${GREEN}$(cat "$APP_DIR/VERSION")${NC}"
@@ -677,35 +677,35 @@ uninstall_service() {
         INSTALL_DIR=${input:-$DEFAULT_INSTALL_DIR}
         APP_DIR="$INSTALL_DIR/app"
     fi
-    
+
     if [ ! -d "$INSTALL_DIR" ]; then
         print_error "安装目录不存在"
         return 1
     fi
-    
+
     print_warning "即将卸载 Claude Relay Service"
     echo -n "确定要卸载吗？(y/N): "
     read -n 1 confirm
     echo
-    
+
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         return 0
     fi
-    
+
     # 停止服务
     stop_service
-    
+
     # 备份数据
     echo -n "是否备份数据？(y/N): "
     read -n 1 backup
     echo
-    
+
     if [[ "$backup" =~ ^[Yy]$ ]]; then
         local backup_dir="$HOME/claude-relay-backup-$(date +%Y%m%d%H%M%S)"
         mkdir -p "$backup_dir"
-        
+
         # Redis使用系统默认位置，不需要备份
-        
+
         # 备份配置文件
         if [ -f "$APP_DIR/.env" ]; then
             cp "$APP_DIR/.env" "$backup_dir/"
@@ -713,13 +713,13 @@ uninstall_service() {
         if [ -f "$APP_DIR/config/config.js" ]; then
             cp "$APP_DIR/config/config.js" "$backup_dir/"
         fi
-        
+
         print_success "数据已备份到: $backup_dir"
     fi
-    
+
     # 删除安装目录
     rm -rf "$INSTALL_DIR"
-    
+
     print_success "卸载完成！"
 }
 
@@ -729,27 +729,27 @@ start_service() {
         print_error "服务未安装，请先运行: $0 install"
         return 1
     fi
-    
+
     print_info "启动服务..."
-    
+
     cd "$APP_DIR"
-    
+
     # 检查是否已运行
     if pgrep -f "node.*src/app.js" > /dev/null; then
         print_warning "服务已在运行"
         return 0
     fi
-    
+
     # 确保日志目录存在
     mkdir -p "$APP_DIR/logs"
-    
+
     # 检查pm2是否可用并且不是从package.json脚本调用的
     if command_exists pm2 && [ "$1" != "--no-pm2" ]; then
         print_info "使用 pm2 启动服务..."
         # 直接使用pm2启动，避免循环调用
         pm2 start "$APP_DIR/src/app.js" --name "claude-relay" --log "$APP_DIR/logs/pm2.log" 2>/dev/null
         sleep 2
-        
+
         # 检查是否启动成功
         if pm2 list 2>/dev/null | grep -q "claude-relay"; then
             print_success "服务已通过 pm2 启动"
@@ -761,9 +761,9 @@ start_service() {
     else
         start_service_direct
     fi
-    
+
     sleep 2
-    
+
     # 验证服务是否成功启动
     if pgrep -f "node.*src/app.js" > /dev/null; then
         show_status
@@ -780,14 +780,14 @@ start_service() {
 # 直接启动服务（不使用pm2）
 start_service_direct() {
     print_info "使用后台进程启动服务..."
-    
+
     # 使用setsid创建新会话，确保进程完全脱离终端
     if command_exists setsid; then
         # setsid方式（推荐）
         setsid nohup node "$APP_DIR/src/app.js" > "$APP_DIR/logs/service.log" 2>&1 < /dev/null &
         local pid=$!
         sleep 1
-        
+
         # 获取实际的子进程PID
         local real_pid=$(pgrep -f "node.*src/app.js" | head -1)
         if [ -n "$real_pid" ]; then
@@ -810,14 +810,14 @@ start_service_direct() {
 # 停止服务
 stop_service() {
     print_info "停止服务..."
-    
+
     # 尝试使用pm2停止
     if command_exists pm2 && [ -n "$APP_DIR" ] && [ -d "$APP_DIR" ]; then
         cd "$APP_DIR" 2>/dev/null
         pm2 stop claude-relay 2>/dev/null || true
         pm2 delete claude-relay 2>/dev/null || true
     fi
-    
+
     # 使用PID文件停止
     if [ -f "$APP_DIR/.pid" ]; then
         local pid=$(cat "$APP_DIR/.pid")
@@ -826,10 +826,10 @@ stop_service() {
             rm -f "$APP_DIR/.pid"
         fi
     fi
-    
+
     # 强制停止所有相关进程
     pkill -f "node.*src/app.js" 2>/dev/null || true
-    
+
     print_success "服务已停止"
 }
 
@@ -847,15 +847,15 @@ update_model_pricing() {
         print_error "服务未安装，请先运行: $0 install"
         return 1
     fi
-    
+
     print_info "更新模型价格数据..."
-    
+
     cd "$APP_DIR"
-    
+
     # 运行更新脚本
     if npm run update:pricing; then
         print_success "模型价格数据更新完成"
-        
+
         # 显示更新后的信息
         if [ -f "data/model_pricing.json" ]; then
             local model_count=$(grep -o '"[^"]*"\s*:' data/model_pricing.json | wc -l)
@@ -874,20 +874,20 @@ update_model_pricing() {
 # 显示状态
 show_status() {
     echo -e "\n${BLUE}=== Claude Relay Service 状态 ===${NC}"
-    
+
     # 获取实际端口
     local actual_port="$APP_PORT"
     if [ -z "$actual_port" ] && [ -f "$APP_DIR/.env" ]; then
         actual_port=$(grep "^PORT=" "$APP_DIR/.env" 2>/dev/null | cut -d'=' -f2)
     fi
     actual_port=${actual_port:-3000}
-    
+
     # 检查进程
     local pid=$(pgrep -f "node.*src/app.js" | head -1)
     if [ -n "$pid" ]; then
         echo -e "服务状态: ${GREEN}运行中${NC}"
         echo "进程 PID: $pid"
-        
+
         # 显示进程信息
         if command_exists ps; then
             local proc_info=$(ps -p $pid -o comm,etime,rss --no-headers 2>/dev/null)
@@ -896,10 +896,10 @@ show_status() {
             fi
         fi
         echo "服务端口: $actual_port"
-        
+
         # 获取公网IP
         local public_ip=$(get_public_ip)
-        
+
         # 显示访问地址
         echo -e "\n访问地址:"
         echo -e "  本地 Web: ${GREEN}http://localhost:$actual_port/web${NC}"
@@ -911,14 +911,14 @@ show_status() {
     else
         echo -e "服务状态: ${RED}未运行${NC}"
     fi
-    
+
     # 显示安装信息
     if [ -n "$INSTALL_DIR" ] && [ -d "$INSTALL_DIR" ]; then
         echo -e "\n安装目录: $INSTALL_DIR"
     elif [ -d "$DEFAULT_INSTALL_DIR" ]; then
         echo -e "\n安装目录: $DEFAULT_INSTALL_DIR"
     fi
-    
+
     # Redis状态
     if command_exists redis-cli; then
         echo -e "\nRedis 状态:"
@@ -932,14 +932,14 @@ show_status() {
         if [ -n "$REDIS_PASSWORD" ]; then
             redis_cmd="$redis_cmd -a '$REDIS_PASSWORD'"
         fi
-        
+
         if $redis_cmd ping 2>/dev/null | grep -q "PONG"; then
             echo -e "  连接状态: ${GREEN}正常${NC}"
         else
             echo -e "  连接状态: ${RED}异常${NC}"
         fi
     fi
-    
+
     echo -e "\n${BLUE}===========================${NC}"
 }
 
@@ -970,26 +970,26 @@ show_menu() {
     echo -e "${BOLD}  Claude Relay Service (CRS) 管理工具  ${NC}"
     echo -e "${BOLD}======================================${NC}"
     echo ""
-    
+
     # 显示当前状态
     echo -e "${YELLOW}当前状态：${NC}"
     if check_installation; then
         echo -e "  安装状态: ${GREEN}已安装${NC} (目录: $INSTALL_DIR)"
-        
+
         # 获取实际端口
         local actual_port="$APP_PORT"
         if [ -z "$actual_port" ] && [ -f "$APP_DIR/.env" ]; then
             actual_port=$(grep "^PORT=" "$APP_DIR/.env" 2>/dev/null | cut -d'=' -f2)
         fi
         actual_port=${actual_port:-3000}
-        
+
         # 检查服务状态
         local pid=$(pgrep -f "node.*src/app.js" | head -1)
         if [ -n "$pid" ]; then
             echo -e "  运行状态: ${GREEN}运行中${NC}"
             echo -e "  进程 PID: $pid"
             echo -e "  服务端口: $actual_port"
-            
+
             # 获取公网IP
             local public_ip=$(get_public_ip)
             if [ "$public_ip" != "localhost" ]; then
@@ -1003,26 +1003,26 @@ show_menu() {
     else
         echo -e "  安装状态: ${RED}未安装${NC}"
     fi
-    
+
     # Redis状态
     if command_exists redis-cli && [ -n "$REDIS_HOST" ]; then
         local redis_cmd="redis-cli -h $REDIS_HOST -p ${REDIS_PORT:-6379}"
         if [ -n "$REDIS_PASSWORD" ]; then
             redis_cmd="$redis_cmd -a '$REDIS_PASSWORD'"
         fi
-        
+
         if $redis_cmd ping 2>/dev/null | grep -q "PONG"; then
             echo -e "  Redis 状态: ${GREEN}连接正常${NC}"
         else
             echo -e "  Redis 状态: ${RED}连接异常${NC}"
         fi
     fi
-    
+
     echo ""
     echo -e "${BOLD}--------------------------------------${NC}"
     echo -e "${YELLOW}请选择操作：${NC}"
     echo ""
-    
+
     if ! check_installation; then
         echo "  1) 安装服务"
         echo "  2) 退出"
@@ -1045,7 +1045,7 @@ show_menu() {
 # 处理菜单选择
 handle_menu_choice() {
     local choice=$1
-    
+
     if ! check_installation; then
         case $choice in
             1)
@@ -1057,12 +1057,12 @@ handle_menu_choice() {
                     read
                     return 1
                 fi
-                
+
                 # 检查Redis
                 if ! check_redis; then
                     print_warning "Redis 连接失败"
                     install_local_redis
-                    
+
                     # 重新测试连接
                     REDIS_HOST="localhost"
                     REDIS_PORT="6379"
@@ -1073,13 +1073,13 @@ handle_menu_choice() {
                         return 1
                     fi
                 fi
-                
+
                 # 安装服务
                 install_service
-                
+
                 # 创建软链接
                 create_symlink
-                
+
                 echo -n "按回车键继续..."
                 read
                 ;;
@@ -1153,7 +1153,7 @@ handle_menu_choice() {
 create_symlink() {
     # 获取脚本的绝对路径
     local script_path=""
-    
+
     # 优先使用项目中的 manage.sh（在 app/scripts 目录下）
     if [ -n "$APP_DIR" ] && [ -f "$APP_DIR/scripts/manage.sh" ]; then
         script_path="$APP_DIR/scripts/manage.sh"
@@ -1170,13 +1170,13 @@ create_symlink() {
         # 备用方法：使用pwd和脚本名
         script_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
     fi
-    
+
     local symlink_path="/usr/bin/crs"
-    
+
     print_info "创建命令行快捷方式..."
     print_info "APP_DIR: $APP_DIR"
     print_info "脚本路径: $script_path"
-    
+
     # 检查脚本文件是否存在
     if [ ! -f "$script_path" ]; then
         print_error "找不到脚本文件: $script_path"
@@ -1192,7 +1192,7 @@ create_symlink() {
         fi
         return 1
     fi
-    
+
     # 如果已存在，直接删除并重新创建（默认使用代码中的最新版本）
     if [ -L "$symlink_path" ] || [ -f "$symlink_path" ]; then
         print_info "更新已存在的软链接..."
@@ -1201,12 +1201,12 @@ create_symlink() {
             return 1
         }
     fi
-    
+
     # 创建软链接
     if sudo ln -s "$script_path" "$symlink_path"; then
         print_success "已创建快捷命令 'crs'"
         echo "您现在可以在任何地方使用 'crs' 命令管理服务"
-        
+
         # 验证软链接
         if [ -L "$symlink_path" ]; then
             print_info "软链接验证成功"
@@ -1229,7 +1229,7 @@ load_config() {
             INSTALL_DIR="$DEFAULT_INSTALL_DIR"
         fi
     fi
-    
+
     if [ -n "$INSTALL_DIR" ]; then
         # 检查是否使用了标准的安装结构（项目在 app 子目录）
         if [ -d "$INSTALL_DIR/app" ] && [ -f "$INSTALL_DIR/app/package.json" ]; then
@@ -1240,7 +1240,7 @@ load_config() {
         else
             APP_DIR="$INSTALL_DIR/app"
         fi
-        
+
         # 加载.env配置
         if [ -f "$APP_DIR/.env" ]; then
             export $(cat "$APP_DIR/.env" | grep -v '^#' | xargs)
@@ -1254,15 +1254,15 @@ load_config() {
 main() {
     # 检测操作系统
     detect_os
-    
+
     if [ "$OS" == "unknown" ]; then
         print_error "不支持的操作系统"
         exit 1
     fi
-    
+
     # 加载配置
     load_config
-    
+
     # 处理命令
     case "$1" in
         install)
@@ -1271,12 +1271,12 @@ main() {
                 print_error "依赖安装失败"
                 exit 1
             fi
-            
+
             # 检查Redis
             if ! check_redis; then
                 print_warning "Redis 连接失败"
                 install_local_redis
-                
+
                 # 重新测试连接
                 REDIS_HOST="localhost"
                 REDIS_PORT="6379"
@@ -1285,10 +1285,10 @@ main() {
                     exit 1
                 fi
             fi
-            
+
             # 安装服务
             install_service
-            
+
             # 创建软链接
             create_symlink
             ;;

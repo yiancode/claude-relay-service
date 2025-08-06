@@ -24,7 +24,8 @@
       "Bash(systemctl enable:*)",
       "Bash(npm run:*)",
       "Bash(git reset:*)",
-      "Bash(gh pr:*)"
+      "Bash(gh pr:*)",
+      "Bash(grep:*)"
     ],
     "deny": []
   }
