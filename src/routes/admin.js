@@ -2750,7 +2750,7 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
 // 计算总体使用费用
 router.get('/usage-costs', authenticateAdmin, async (req, res) => {
   try {
-    const { period = 'all' } = req.query; // all, today, monthly
+    const { period = 'all' } = req.query; // all, today, monthly, 7days
     
     logger.info(`💰 Calculating usage costs for period: ${period}`);
     
