@@ -13,6 +13,7 @@ pnpm-debug.log*
 
 # Claude specific directories
 # .claude/
+.claude/settings.local.json
 
 # Data directory (contains sensitive information)
 data/

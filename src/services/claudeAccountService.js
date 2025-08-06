@@ -814,11 +814,17 @@ class ClaudeAccountService {
         throw new Error('Account not found');
       }
 
-      // 清除限流状态
-      delete accountData.rateLimitedAt;
-      delete accountData.rateLimitStatus;
-      delete accountData.rateLimitEndAt;  // 清除限流结束时间
-      await redis.setClaudeAccount(accountId, accountData);
+      // 使用 HDEL 清除限流状态字段
+      const key = `claude:account:${accountId}`;
+      const client = redis.client;
+      
+      await client.hdel(key, 'rateLimitedAt');
+      await client.hdel(key, 'rateLimitStatus');
+      await client.hdel(key, 'rateLimitEndAt');
+      
+      // 同时清除会话窗口信息，因为限流解除后会话窗口应该重新计算
+      await client.hdel(key, 'sessionWindowStart');
+      await client.hdel(key, 'sessionWindowEnd');
 
       logger.success(`✅ Rate limit removed for account: ${accountData.name} (${accountId})`);
       return { success: true };
@@ -902,8 +908,20 @@ class ClaudeAccountService {
           rateLimitEndAt = endTime.toISOString();
         }
 
+        // 如果限流时间已到期，自动清除
+        if (minutesRemaining <= 0) {
+          await this.removeAccountRateLimit(accountId);
+          return {
+            isRateLimited: false,
+            rateLimitedAt: null,
+            minutesSinceRateLimit: 0,
+            minutesRemaining: 0,
+            rateLimitEndAt: null
+          };
+        }
+
         return {
-          isRateLimited: minutesRemaining > 0,
+          isRateLimited: true,
           rateLimitedAt: accountData.rateLimitedAt,
           minutesSinceRateLimit,
           minutesRemaining,
@@ -996,6 +1014,7 @@ class ClaudeAccountService {
       if (!accountData || Object.keys(accountData).length === 0) {
         return null;
       }
+
 
       // 如果没有会话窗口信息，返回null
       if (!accountData.sessionWindowStart || !accountData.sessionWindowEnd) {
@@ -1129,7 +1148,7 @@ class ClaudeAccountService {
       }
 
       // 检查当前限流状态
-      const rateLimitInfo = await this.getRateLimitInfo(accountId);
+      const rateLimitInfo = await this.getAccountRateLimitInfo(accountId);
       if (!rateLimitInfo.isRateLimited) {
         // 如果已经不被限流，直接返回
         return {
@@ -1139,31 +1158,45 @@ class ClaudeAccountService {
         };
       }
 
+      // 如果限流时间已到期（剩余0分钟），自动清除限流状态
+      if (rateLimitInfo.minutesRemaining <= 0) {
+        logger.info(`⏰ Rate limit expired for account ${accountId}, auto-clearing rate limit status`);
+        
+        // 清除限流状态
+        await this.removeAccountRateLimit(accountId);
+        
+        // 重新计算会话窗口
+        await this.updateSessionWindow(accountId);
+        
+        return {
+          isRateLimited: false,
+          minutesRemaining: 0,
+          message: '限流已到期：账户状态已自动恢复正常'
+        };
+      }
+
+      // 先尝试刷新token以确保有最新的访问令牌
+      try {
+        await this.refreshAccountToken(accountId);
+        logger.info(`🔄 Token refreshed for account ${accountId} before rate limit test`);
+      } catch (refreshError) {
+        logger.warn(`⚠️ Token refresh failed for account ${accountId}, proceeding with existing token:`, refreshError.message);
+      }
+
       // 获取有效的访问令牌
       const accessToken = await this.getValidAccessToken(accountId);
       if (!accessToken) {
-        throw new Error('Unable to get valid access token');
+        return {
+          isRateLimited: true,
+          minutesRemaining: rateLimitInfo.minutesRemaining,
+          message: `测试失败：无法获取有效的访问令牌，账户可能已失效`
+        };
       }
 
       // 创建代理配置
       let httpsAgent = null;
       if (accountData.proxy) {
-        const proxyConfig = JSON.parse(accountData.proxy);
-        if (proxyConfig.type === 'socks5') {
-          httpsAgent = new SocksProxyAgent({
-            hostname: proxyConfig.host,
-            port: proxyConfig.port,
-            username: proxyConfig.username || undefined,
-            password: proxyConfig.password || undefined
-          });
-        } else if (proxyConfig.type === 'http') {
-          httpsAgent = new HttpsProxyAgent({
-            hostname: proxyConfig.host,
-            port: proxyConfig.port,
-            username: proxyConfig.username || undefined,
-            password: proxyConfig.password || undefined
-          });
-        }
+        httpsAgent = this._createProxyAgent(accountData.proxy);
       }
 
       // 发送轻量级测试请求到Claude API
@@ -1171,13 +1204,8 @@ class ClaudeAccountService {
         'https://api.anthropic.com/v1/messages',
         {
           model: 'claude-3-haiku-20240307',
-          max_tokens: 10,
-          messages: [
-            {
-              role: 'user',
-              content: 'Hi'
-            }
-          ]
+          max_tokens: 5,
+          messages: [{ role: 'user', content: 'test' }]
         },
         {
           headers: {
@@ -1186,7 +1214,7 @@ class ClaudeAccountService {
             'anthropic-version': '2023-06-01'
           },
           httpsAgent,
-          timeout: 10000
+          timeout: 15000
         }
       );
 
@@ -1195,7 +1223,7 @@ class ClaudeAccountService {
         logger.info(`🎉 Rate limit test successful for account ${accountData.name} (${accountId}) - clearing rate limit status`);
         
         // 清除限流状态
-        await this.clearRateLimit(accountId);
+        await this.removeAccountRateLimit(accountId);
         
         // 重新计算会话窗口
         await this.updateSessionWindow(accountId);
@@ -1205,26 +1233,47 @@ class ClaudeAccountService {
           minutesRemaining: 0,
           message: '测试成功：账户已恢复正常'
         };
-      } else {
-        // 不应该到这里，但以防万一
-        return rateLimitInfo;
       }
 
     } catch (error) {
       // 检查错误类型
       if (error.response && error.response.status === 429) {
         // 仍然被限流
-        const rateLimitInfo = await this.getRateLimitInfo(accountId);
+        const rateLimitInfo = await this.getAccountRateLimitInfo(accountId);
         logger.info(`⏳ Rate limit test confirmed account ${accountId} is still limited - ${rateLimitInfo.minutesRemaining} minutes remaining`);
         return {
           isRateLimited: true,
           minutesRemaining: rateLimitInfo.minutesRemaining,
           message: `账户仍被限流，剩余 ${rateLimitInfo.minutesRemaining} 分钟`
         };
+      } else if (error.response && error.response.status === 401) {
+        // Token无效，可能是账户被禁用或refresh token过期
+        logger.error(`❌ Account ${accountId} token invalid (401), may be disabled or refresh token expired`);
+        
+        // 检查当前的限流状态信息
+        const rateLimitInfo = await this.getAccountRateLimitInfo(accountId);
+        
+        // 如果账户有限流状态但token无效，我们应该清除限流状态
+        // 因为无法验证真实的限流状态，且token无效意味着账户有更严重的问题
+        if (rateLimitInfo.isRateLimited) {
+          logger.warn(`⚠️ Account ${accountId} has rate limit status but invalid token - clearing rate limit status`);
+          await this.removeAccountRateLimit(accountId);
+        }
+        
+        return {
+          isRateLimited: false,
+          minutesRemaining: 0,
+          message: '测试失败：账户token无效，可能已被禁用或需要重新授权。已清除限流状态。'
+        };
       } else {
         // 其他错误
         logger.error(`❌ Rate limit test failed for account ${accountId}:`, error.message);
-        throw new Error(`测试失败: ${error.message}`);
+        const rateLimitInfo = await this.getAccountRateLimitInfo(accountId);
+        return {
+          isRateLimited: rateLimitInfo.isRateLimited,
+          minutesRemaining: rateLimitInfo.minutesRemaining,
+          message: `测试失败: ${error.message}`
+        };
       }
     }
   }
