@@ -12,7 +12,7 @@ pnpm-debug.log*
 !.env.production
 
 # Claude specific directories
-# .claude/
+.claude/
 .claude/settings.local.json
 
 # Data directory (contains sensitive information)
@@ -244,3 +244,4 @@ web/admin-spa/dist/
 .roomodes
 .trae/
 web-bundles/
+/update-model-pricing.js
