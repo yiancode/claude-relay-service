@@ -50,6 +50,62 @@
           </div>
         </div>
 
+        <!-- Clerk 网络连接错误 -->
+        <div v-else-if="clerkStore.isNetworkError" class="space-y-6">
+          <div class="text-center">
+            <div
+              class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-500/20"
+            >
+              <svg
+                class="h-6 w-6 text-red-400"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  d="M18.364 5.636l-12.728 12.728m0-12.728l12.728 12.728"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                />
+              </svg>
+            </div>
+            <h3 class="mb-2 font-medium text-white">网络连接问题</h3>
+            <p class="mb-4 text-slate-400">无法连接到社交登录服务器，这可能是网络环境导致的</p>
+            <div class="mb-6 space-y-2">
+              <p class="text-sm text-slate-500">建议解决方案：</p>
+              <ul class="space-y-1 text-sm text-slate-400">
+                <li>• 检查网络连接是否正常</li>
+                <li>• 更换网络环境或节点</li>
+                <li>• 使用 VPN 或代理服务</li>
+                <li>• 或直接使用传统登录方式</li>
+              </ul>
+            </div>
+            <div class="flex flex-col space-y-3">
+              <button
+                class="inline-flex items-center justify-center rounded-lg bg-green-600 px-4 py-2 font-medium text-white transition-colors hover:bg-green-700"
+                @click="retryClerkConnection"
+              >
+                <svg class="mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                  />
+                </svg>
+                重试连接
+              </button>
+              <RouterLink
+                class="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 font-medium text-white transition-colors hover:bg-blue-700"
+                to="/user-login"
+              >
+                使用传统登录
+              </RouterLink>
+            </div>
+          </div>
+        </div>
+
         <!-- Clerk 初始化失败 -->
         <div v-else-if="!clerkStore.isClerkReady" class="space-y-6">
           <div class="text-center">
@@ -148,6 +204,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useClerk, useUser } from '@clerk/vue'
 import { useClerkStore } from '@/stores/clerk'
 import { useUserStore } from '@/stores/user'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
@@ -156,6 +213,10 @@ import { showToast } from '@/utils/toast'
 const router = useRouter()
 const clerkStore = useClerkStore()
 const userStore = useUserStore()
+
+// 获取 Clerk 实例
+const clerk = useClerk()
+const user = useUser()
 
 // 响应式数据
 const error = ref('')
@@ -249,6 +310,16 @@ onMounted(async () => {
   setTimeout(() => {
     try {
       console.log('UserLoginSocial: 尝试初始化 Clerk')
+
+      // 传递 Clerk 实例到 Store
+      if (clerk && user) {
+        console.log('UserLoginSocial: 传递 Clerk 实例到 Store')
+        clerkStore.setClerkInstance(clerk, user)
+      } else {
+        console.error('UserLoginSocial: 无法获取 Clerk 实例')
+        throw new Error('无法获取 Clerk 实例')
+      }
+
       clerkStore.initializeClerk()
 
       // 等待最多5秒来检查Clerk是否成功初始化
@@ -284,6 +355,41 @@ onMounted(async () => {
     }
   }, 500) // 延迟500ms确保Vue应用完全初始化
 })
+
+// 重试Clerk连接
+async function retryClerkConnection() {
+  console.log('UserLoginSocial: 重试Clerk连接')
+  clearError()
+
+  // 重置Store状态
+  clerkStore.clearError()
+
+  // 测试网络连接
+  const connectivity = await clerkStore.testClerkConnectivity()
+  if (!connectivity) {
+    showError('网络连接测试失败，请检查网络环境或使用VPN')
+    return
+  }
+
+  // 重新初始化Clerk
+  try {
+    // 清理之前的实例
+    clerkStore.initializeClerk()
+
+    // 重新传递实例
+    setTimeout(() => {
+      if (clerk && user) {
+        console.log('UserLoginSocial: 重新传递 Clerk 实例到 Store')
+        clerkStore.setClerkInstance(clerk, user)
+      }
+    }, 500)
+
+    showToast('正在重新连接社交登录服务...', 'info')
+  } catch (error) {
+    console.error('UserLoginSocial: 重试连接失败', error)
+    showError('重试连接失败，建议使用传统登录方式')
+  }
+}
 
 // 页面卸载时的清理
 onUnmounted(() => {

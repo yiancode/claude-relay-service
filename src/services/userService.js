@@ -748,12 +748,18 @@ class UserService {
 
       // 只更新提供的字段
       const allowedFields = [
-        'displayName', 'firstName', 'lastName', 'avatar',
-        'role', 'isActive', 'lastLoginAt', 'email'
+        'displayName',
+        'firstName',
+        'lastName',
+        'avatar',
+        'role',
+        'isActive',
+        'lastLoginAt',
+        'email'
       ]
 
       for (const field of allowedFields) {
-        if (updateData.hasOwnProperty(field)) {
+        if (Object.prototype.hasOwnProperty.call(updateData, field)) {
           updatedUser[field] = updateData[field]
         }
       }
@@ -801,7 +807,7 @@ class UserService {
         const userData = await client.get(key)
         if (userData) {
           const user = JSON.parse(userData)
-          
+
           // 只统计 Clerk 用户
           if (user.provider === 'clerk') {
             stats.totalClerkUsers++
@@ -813,17 +819,18 @@ class UserService {
             // 按 OAuth 提供商分类（从 clerkUserId 或其他字段推断）
             const oauthProvider = this.extractOAuthProvider(user)
             if (oauthProvider) {
-              stats.clerkUsersByProvider[oauthProvider] = (stats.clerkUsersByProvider[oauthProvider] || 0) + 1
+              stats.clerkUsersByProvider[oauthProvider] =
+                (stats.clerkUsersByProvider[oauthProvider] || 0) + 1
             }
 
             // 统计最近创建的用户
             if (user.createdAt) {
               const createdAt = new Date(user.createdAt)
-              
+
               if (createdAt >= today) {
                 stats.clerkUsersCreatedToday++
               }
-              
+
               if (createdAt >= weekAgo) {
                 stats.clerkUsersCreatedThisWeek++
               }

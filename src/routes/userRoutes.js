@@ -751,7 +751,7 @@ router.get('/admin/ldap-test', authenticateUserOrAdmin, requireAdmin, async (req
 router.post('/clerk/auth', async (req, res) => {
   try {
     const {
-      provider,
+      provider: _provider,
       clerkUserId,
       email,
       firstName,
@@ -831,7 +831,9 @@ router.post('/clerk/auth', async (req, res) => {
     }
 
     // 认证成功
-    logger.info(`✅ Clerk user login successful: ${authResult.user.email} (${oauthProvider}) from IP: ${clientIp}`)
+    logger.info(
+      `✅ Clerk user login successful: ${authResult.user.email} (${oauthProvider}) from IP: ${clientIp}`
+    )
 
     res.json({
       success: true,
@@ -864,16 +866,8 @@ router.post('/clerk/auth', async (req, res) => {
 // 🔄 Clerk 用户数据同步
 router.post('/clerk/sync', async (req, res) => {
   try {
-    const {
-      clerkUserId,
-      email,
-      firstName,
-      lastName,
-      fullName,
-      avatar,
-      provider,
-      clerkToken
-    } = req.body
+    const { clerkUserId, email, firstName, lastName, fullName, avatar, provider, clerkToken } =
+      req.body
     const clientIp = req.ip || req.connection.remoteAddress || 'unknown'
 
     // 验证必需的字段
