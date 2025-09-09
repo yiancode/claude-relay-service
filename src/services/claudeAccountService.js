@@ -3,8 +3,8 @@ const crypto = require('crypto')
 const ProxyHelper = require('../utils/proxyHelper')
 const axios = require('axios')
 const redis = require('../models/redis')
-const logger = require('../utils/logger')
 const config = require('../../config/config')
+const logger = require('../utils/logger')
 const { maskToken } = require('../utils/tokenMask')
 const {
   logRefreshStart,
@@ -60,7 +60,9 @@ class ClaudeAccountService {
       schedulable = true, // 是否可被调度
       subscriptionInfo = null, // 手动设置的订阅信息
       autoStopOnWarning = false, // 5小时使用量接近限制时自动停止调度
-      useUnifiedUserAgent = false // 是否使用统一Claude Code版本的User-Agent
+      useUnifiedUserAgent = false, // 是否使用统一Claude Code版本的User-Agent
+      useUnifiedClientId = false, // 是否使用统一的客户端标识
+      unifiedClientId = '' // 统一的客户端标识
     } = options
 
     const accountId = uuidv4()
@@ -93,6 +95,8 @@ class ClaudeAccountService {
         schedulable: schedulable.toString(), // 是否可被调度
         autoStopOnWarning: autoStopOnWarning.toString(), // 5小时使用量接近限制时自动停止调度
         useUnifiedUserAgent: useUnifiedUserAgent.toString(), // 是否使用统一Claude Code版本的User-Agent
+        useUnifiedClientId: useUnifiedClientId.toString(), // 是否使用统一的客户端标识
+        unifiedClientId: unifiedClientId || '', // 统一的客户端标识
         // 优先使用手动设置的订阅信息，否则使用OAuth数据中的，否则默认为空
         subscriptionInfo: subscriptionInfo
           ? JSON.stringify(subscriptionInfo)
@@ -166,7 +170,10 @@ class ClaudeAccountService {
       createdAt: accountData.createdAt,
       expiresAt: accountData.expiresAt,
       scopes: claudeAiOauth ? claudeAiOauth.scopes : [],
-      autoStopOnWarning
+      autoStopOnWarning,
+      useUnifiedUserAgent,
+      useUnifiedClientId,
+      unifiedClientId
     }
   }
 
@@ -492,6 +499,9 @@ class ClaudeAccountService {
             autoStopOnWarning: account.autoStopOnWarning === 'true', // 默认为false
             // 添加统一User-Agent设置
             useUnifiedUserAgent: account.useUnifiedUserAgent === 'true', // 默认为false
+            // 添加统一客户端标识设置
+            useUnifiedClientId: account.useUnifiedClientId === 'true', // 默认为false
+            unifiedClientId: account.unifiedClientId || '', // 统一的客户端标识
             // 添加停止原因
             stoppedReason: account.stoppedReason || null
           }
@@ -528,7 +538,9 @@ class ClaudeAccountService {
         'schedulable',
         'subscriptionInfo',
         'autoStopOnWarning',
-        'useUnifiedUserAgent'
+        'useUnifiedUserAgent',
+        'useUnifiedClientId',
+        'unifiedClientId'
       ]
       const updatedData = { ...accountData }
 
@@ -695,6 +707,8 @@ class ClaudeAccountService {
           // 验证映射的账户是否仍然可用
           const mappedAccount = activeAccounts.find((acc) => acc.id === mappedAccountId)
           if (mappedAccount) {
+            // 🚀 智能会话续期：剩余时间少于14天时自动续期到15天
+            await redis.extendSessionAccountMappingTTL(sessionHash)
             logger.info(
               `🎯 Using sticky session account: ${mappedAccount.name} (${mappedAccountId}) for session ${sessionHash}`
             )
@@ -721,7 +735,9 @@ class ClaudeAccountService {
 
       // 如果有会话哈希，建立新的映射
       if (sessionHash) {
-        await redis.setSessionAccountMapping(sessionHash, selectedAccountId, 3600) // 1小时过期
+        // 从配置获取TTL（小时），转换为秒
+        const ttlSeconds = (config.session?.stickyTtlHours || 1) * 60 * 60
+        await redis.setSessionAccountMapping(sessionHash, selectedAccountId, ttlSeconds)
         logger.info(
           `🎯 Created new sticky session mapping: ${sortedAccounts[0].name} (${selectedAccountId}) for session ${sessionHash}`
         )
@@ -815,6 +831,8 @@ class ClaudeAccountService {
               )
               await redis.deleteSessionAccountMapping(sessionHash)
             } else {
+              // 🚀 智能会话续期：剩余时间少于14天时自动续期到15天
+              await redis.extendSessionAccountMappingTTL(sessionHash)
               logger.info(
                 `🎯 Using sticky session shared account: ${mappedAccount.name} (${mappedAccountId}) for session ${sessionHash}`
               )
@@ -873,7 +891,9 @@ class ClaudeAccountService {
 
       // 如果有会话哈希，建立新的映射
       if (sessionHash) {
-        await redis.setSessionAccountMapping(sessionHash, selectedAccountId, 3600) // 1小时过期
+        // 从配置获取TTL（小时），转换为秒
+        const ttlSeconds = (config.session?.stickyTtlHours || 1) * 60 * 60
+        await redis.setSessionAccountMapping(sessionHash, selectedAccountId, ttlSeconds)
         logger.info(
           `🎯 Created new sticky session mapping for shared account: ${candidateAccounts[0].name} (${selectedAccountId}) for session ${sessionHash}`
         )
@@ -1067,6 +1087,8 @@ class ClaudeAccountService {
       const updatedAccountData = { ...accountData }
       updatedAccountData.rateLimitedAt = new Date().toISOString()
       updatedAccountData.rateLimitStatus = 'limited'
+      // 限流时停止调度，与 OpenAI 账号保持一致
+      updatedAccountData.schedulable = false
 
       // 如果提供了准确的限流重置时间戳（来自API响应头）
       if (rateLimitResetTimestamp) {
@@ -1151,9 +1173,14 @@ class ClaudeAccountService {
       delete accountData.rateLimitedAt
       delete accountData.rateLimitStatus
       delete accountData.rateLimitEndAt // 清除限流结束时间
+      // 恢复可调度状态，与 OpenAI 账号保持一致
+      accountData.schedulable = true
       await redis.setClaudeAccount(accountId, accountData)
 
-      logger.success(`✅ Rate limit removed for account: ${accountData.name} (${accountId})`)
+      logger.success(
+        `✅ Rate limit removed for account: ${accountData.name} (${accountId}), schedulable restored`
+      )
+
       return { success: true }
     } catch (error) {
       logger.error(`❌ Failed to remove rate limit for account: ${accountId}`, error)

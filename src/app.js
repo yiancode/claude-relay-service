@@ -554,6 +554,15 @@ class Application {
     logger.info(
       `🔄 Cleanup tasks scheduled every ${config.system.cleanupInterval / 1000 / 60} minutes`
     )
+    
+    // 🚨 启动限流状态自动清理服务
+    // 每5分钟检查一次过期的限流状态，确保账号能及时恢复调度
+    const rateLimitCleanupService = require('./services/rateLimitCleanupService')
+    const cleanupIntervalMinutes = config.system.rateLimitCleanupInterval || 5 // 默认5分钟
+    rateLimitCleanupService.start(cleanupIntervalMinutes)
+    logger.info(
+      `🚨 Rate limit cleanup service started (checking every ${cleanupIntervalMinutes} minutes)`
+    )
   }
 
   setupGracefulShutdown() {
@@ -570,6 +579,15 @@ class Application {
             logger.info('💰 Pricing service cleaned up')
           } catch (error) {
             logger.error('❌ Error cleaning up pricing service:', error)
+          }
+          
+          // 停止限流清理服务
+          try {
+            const rateLimitCleanupService = require('./services/rateLimitCleanupService')
+            rateLimitCleanupService.stop()
+            logger.info('🚨 Rate limit cleanup service stopped')
+          } catch (error) {
+            logger.error('❌ Error stopping rate limit cleanup service:', error)
           }
 
           try {
