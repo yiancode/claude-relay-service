@@ -5438,7 +5438,7 @@ router.get('/oem-settings', async (req, res) => {
 
     // 默认设置
     const defaultSettings = {
-      siteName: 'Claude Relay Service',
+      siteName: 'ViliCode',
       siteIcon: '',
       siteIconData: '', // Base64编码的图标数据
       showAdminButton: true, // 是否显示管理后台按钮

@@ -1,4 +1,3 @@
-# Claude Relay Service
 
 <div align="center">
 

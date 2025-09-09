@@ -23,7 +23,7 @@
               stroke-width="2"
             />
           </svg>
-          <span class="ml-2 text-xl font-bold text-gray-900 dark:text-white">Claude Relay</span>
+          <span class="ml-2 text-xl font-bold text-gray-900 dark:text-white">ViliCode</span>
         </div>
       </div>
 

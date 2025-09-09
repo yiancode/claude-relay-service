@@ -180,7 +180,7 @@ class WebhookService {
 
     const payload = {
       text,
-      username: 'Claude Relay Service',
+      username: 'ViliCode',
       icon_emoji: this.getSlackEmoji(type)
     }
 
@@ -194,7 +194,7 @@ class WebhookService {
     const embed = this.formatMessageForDiscord(type, data)
 
     const payload = {
-      username: 'Claude Relay Service',
+      username: 'ViliCode',
       embeds: [embed]
     }
 
@@ -313,7 +313,7 @@ class WebhookService {
     const details = this.formatNotificationDetails(data)
     return (
       `## ${title}\n\n` +
-      `> **服务**: Claude Relay Service\n` +
+      `> **服务**: ViliCode\n` +
       `> **时间**: ${new Date().toLocaleString('zh-CN', { timeZone: this.timezone })}\n\n${details}`
     )
   }
@@ -325,7 +325,7 @@ class WebhookService {
     const details = this.formatNotificationDetails(data)
 
     return (
-      `#### 服务: Claude Relay Service\n` +
+      `#### 服务: ViliCode\n` +
       `#### 时间: ${new Date().toLocaleString('zh-CN', { timeZone: this.timezone })}\n\n${details}`
     )
   }
@@ -361,7 +361,7 @@ class WebhookService {
       fields,
       timestamp: getISOStringWithTimezone(new Date()),
       footer: {
-        text: 'Claude Relay Service'
+        text: 'ViliCode'
       }
     }
   }
@@ -453,7 +453,7 @@ class WebhookService {
     }
 
     // 添加服务标识和时间戳
-    lines.push(`\n服务: Claude Relay Service`)
+    lines.push(`\n服务: ViliCode`)
     lines.push(`时间: ${new Date().toLocaleString('zh-CN', { timeZone: this.timezone })}`)
 
     return lines.join('\n')
@@ -595,7 +595,7 @@ class WebhookService {
   async testWebhook(platform) {
     try {
       const testData = {
-        message: 'Claude Relay Service webhook测试',
+        message: 'ViliCode webhook测试',
         timestamp: getISOStringWithTimezone(new Date())
       }
 

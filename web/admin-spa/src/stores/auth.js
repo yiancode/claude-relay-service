@@ -11,7 +11,7 @@ export const useAuthStore = defineStore('auth', () => {
   const loginError = ref('')
   const loginLoading = ref(false)
   const oemSettings = ref({
-    siteName: 'Claude Relay Service',
+    siteName: 'ViliCode',
     siteIcon: '',
     siteIconData: '',
     faviconData: ''

@@ -62,7 +62,7 @@ services:
       - TIMEZONE_OFFSET=${TIMEZONE_OFFSET:-8}
       
       # 🎨 Web 界面配置
-      - WEB_TITLE=${WEB_TITLE:-Claude Relay Service}
+      - WEB_TITLE=${WEB_TITLE:-ViliCode}
       - WEB_DESCRIPTION=${WEB_DESCRIPTION:-Multi-account Claude API relay service}
       - WEB_LOGO_URL=${WEB_LOGO_URL:-/assets/logo.png}
       

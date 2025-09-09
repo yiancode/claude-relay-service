@@ -75,7 +75,7 @@
                       v-model="oemSettings.siteName"
                       class="form-input w-full max-w-md dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
                       maxlength="100"
-                      placeholder="Claude Relay Service"
+                      placeholder="ViliCode"
                       type="text"
                     />
                     <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -241,7 +241,7 @@
                 v-model="oemSettings.siteName"
                 class="form-input w-full dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
                 maxlength="100"
-                placeholder="Claude Relay Service"
+                placeholder="ViliCode"
                 type="text"
               />
             </div>
@@ -820,7 +820,7 @@
               <input
                 v-model="platformForm.group"
                 class="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-gray-900 shadow-sm transition-all placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                placeholder="默认: claude-relay"
+                placeholder="默认: vilicode"
                 type="text"
               />
             </div>

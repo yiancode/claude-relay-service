@@ -78,7 +78,7 @@ class ServiceManager {
       return false
     }
 
-    console.log('🚀 启动 Claude Relay Service...')
+    console.log('🚀 启动 ViliCode...')
 
     if (daemon) {
       // 后台运行模式 - 使用nohup实现真正的后台运行
@@ -227,7 +227,7 @@ class ServiceManager {
 
   help() {
     console.log(`
-🔧 Claude Relay Service 进程管理器
+🔧 ViliCode 进程管理器
 
 用法: npm run service <command> [options]
 
