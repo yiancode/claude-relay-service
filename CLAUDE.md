@@ -61,6 +61,21 @@ Claude Relay Service 是一个功能完整的 AI API 中转服务，支持 Claud
   - `openaiAccountService.js`: OpenAI账户管理
   - 支持多种OpenAI兼容端点
 
+- **CCR服务链** (Claude Console Relay):
+  - `ccrAccountService.js`: CCR账户管理，支持API Key配置
+  - `ccrRelayService.js`: CCR请求转发和代理处理
+  - 支持用户自定义API URL和代理设置
+
+- **Claude Console服务链**:
+  - `claudeConsoleAccountService.js`: Claude Console账户管理
+  - `claudeConsoleRelayService.js`: Claude Console API中转
+  - 专用的Console API端点支持
+
+- **Bedrock服务链** (AWS Bedrock):
+  - `bedrockAccountService.js`: Bedrock账户管理，AWS凭据配置
+  - `bedrockRelayService.js`: Bedrock API请求转发
+  - 支持AWS Claude模型调用
+
 - **统一认证层**:
   - `apiKeyService.js`: API Key验证、限流、使用统计
   - `middleware/auth.js`: 请求认证中间件
@@ -79,8 +94,8 @@ npm run install:web           # 安装Web界面依赖
 # 开发和运行
 npm run dev                   # 开发模式（热重载）
 npm start                     # 生产模式
-npm test                      # 运行测试
-npm run lint                  # 代码检查和自动修复
+npm test                      # 运行测试（注意：当前项目缺少实际测试文件）
+npm run lint                  # 代码检查和自动修复（ESLint + Prettier）
 npm run lint:check            # 代码检查（不自动修复）
 npm run format                # Prettier格式化所有文件
 npm run format:check          # 检查格式但不修复
@@ -133,6 +148,11 @@ npm run status:detail         # 详细状态信息
 - `REDIS_HOST`: Redis主机地址（默认localhost）
 - `REDIS_PORT`: Redis端口（默认6379）
 - `REDIS_PASSWORD`: Redis密码（可选）
+
+配置文件要求：
+- `config/config.js`: 基于 `config/config.example.js` 创建
+- 支持多种AI服务的配置：Claude、Gemini、OpenAI、CCR、Bedrock
+- 每种服务可配置独立的代理和认证设置
 
 初始化命令：
 ```bash
@@ -245,10 +265,13 @@ npm run setup  # 自动生成密钥并创建管理员账户
 ### 代码格式化要求
 
 - **必须使用 Prettier 格式化所有代码**
+  - Prettier配置：无分号、单引号、100字符行宽、2空格缩进
+  - ESLint集成：自动修复代码风格问题，支持Node.js和ES2021
 - 后端代码（src/）：运行 `npx prettier --write <file>` 格式化
 - 前端代码（web/admin-spa/）：已安装 `prettier-plugin-tailwindcss`，运行 `npx prettier --write <file>` 格式化
 - 提交前检查格式：`npx prettier --check <file>`
-- 格式化所有文件：`npm run format`（如果配置了此脚本）
+- 格式化所有文件：`npm run format`
+- 代码质量检查：`npm run lint` （自动修复）或 `npm run lint:check`（仅检查）
 
 ### 前端开发特殊要求
 
@@ -279,8 +302,10 @@ npm run setup  # 自动生成密钥并创建管理员账户
 
 - **测试执行**:
   - 运行 `npm test` 执行测试套件（Jest + SuperTest 配置）
-  - 注意：当前项目缺少实际测试文件，建议补充单元测试和集成测试
+  - ⚠️ **重要**: 当前项目缺少实际测试文件，建议补充单元测试和集成测试
+  - 测试框架配置：Jest环境已配置，支持Node.js和ES模块
   - 前端测试：在 `web/admin-spa/` 目录下运行前端测试
+  - 推荐测试目标：服务层单元测试、API端点集成测试、OAuth流程测试
 
 - **功能验证**:
   - 在修改核心服务后，使用 CLI 工具验证功能：`npm run cli status`
@@ -311,6 +336,12 @@ npm run setup  # 自动生成密钥并创建管理员账户
   - Redis性能：使用 `redis-cli monitor` 监控Redis操作
   - 连接池状态：检查 `cacheMonitor` 工具输出
   - 内存使用：`npm run monitor` 脚本
+  - LRU缓存统计：查看日志中的缓存命中率和清理统计
+  - SSE流性能：监控客户端连接数和流处理延迟
+- **Redis调试技巧**:
+  - `redis-cli --scan --pattern "api_key:*"` - 查看API Key模式
+  - `redis-cli --scan --pattern "claude_account:*"` - 查看Claude账户
+  - `npm run data:debug` - 使用项目提供的Redis调试工具
 - **代码审查**: 关注安全性（加密存储）、性能（异步处理）、错误处理
 - **部署前检查**: 运行 lint → 测试 CLI 功能 → 检查日志 → Docker 构建
 
@@ -321,6 +352,9 @@ npm run setup  # 自动生成密钥并创建管理员账户
   2. 实现统一调度器 `unified{Service}Scheduler.js`
   3. 添加路由到 `src/routes/{service}Routes.js`
   4. 更新 `src/app.js` 中的路由注册
+  5. 配置加密存储（参考CCR和Bedrock服务的实现）
+  6. 添加CLI命令支持（在 `cli/` 目录下）
+  7. 更新Web界面管理功能
 
 - **修改认证逻辑**:
   1. 检查 `src/middleware/auth.js` 中的 `authenticateApiKey`
@@ -385,6 +419,8 @@ npm run setup  # 自动生成密钥并创建管理员账户
 - 自动从流中解析 usage 数据并记录
 - 客户端断开时通过 AbortController 清理资源
 - 错误时发送适当的 SSE 错误事件
+- 流式调试：监控 `claudeRelayService.js` 中的流处理逻辑
+- 性能优化：使用LRU缓存减少重复解密操作，连接池管理减少延迟
 
 ### CLI 工具使用示例
 
@@ -399,9 +435,21 @@ npm run cli status
 npm run cli accounts list
 npm run cli accounts refresh <accountId>
 
+# 管理 CCR 账户
+npm run cli ccr list              # 列出CCR账户
+npm run cli ccr create -- --name "CCR Account" --url "https://api.example.com"
+
+# 管理 Bedrock 账户 
+npm run cli bedrock list          # 列出Bedrock账户
+npm run cli bedrock test <accountId>  # 测试Bedrock连接
+
 # 管理员操作
 npm run cli admin create -- --username admin2
 npm run cli admin reset-password -- --username admin
+
+# 调试和监控
+npm run cli redis stats           # Redis统计信息
+npm run cli usage summary          # 使用情况汇总
 ```
 
 # important-instruction-reminders
