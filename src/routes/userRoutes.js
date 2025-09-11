@@ -867,8 +867,16 @@ router.post('/clerk/auth', async (req, res) => {
 // 🔄 Clerk 用户数据同步
 router.post('/clerk/sync', async (req, res) => {
   try {
-    const { clerkUserId, email, firstName, lastName, fullName, avatar, provider, clerkToken } =
-      req.body
+    const {
+      clerkUserId,
+      email,
+      firstName,
+      lastName,
+      fullName,
+      avatar,
+      provider: _provider,
+      clerkToken
+    } = req.body
     const clientIp = req.ip || req.connection.remoteAddress || 'unknown'
 
     // 验证必需的字段
@@ -896,7 +904,7 @@ router.post('/clerk/sync', async (req, res) => {
       lastName: lastName || '',
       fullName: fullName || `${firstName || ''} ${lastName || ''}`.trim(),
       avatar: avatar || null,
-      provider: provider || 'clerk'
+      provider: _provider || 'clerk'
     })
 
     if (!syncResult.success) {
@@ -978,6 +986,324 @@ router.get('/clerk/profile', authenticateUser, async (req, res) => {
     res.status(500).json({
       error: 'Profile error',
       message: 'Failed to retrieve Clerk user profile'
+    })
+  }
+})
+
+// ========== 用户迁移接口 ==========
+
+// 🔗 检查用户是否可以迁移到 Clerk
+router.post('/clerk/check-migration', authenticateUser, async (req, res) => {
+  try {
+    const { email } = req.body
+    const { user } = req
+
+    // 验证输入
+    if (!email || !inputValidator.isValidEmail(email)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid email',
+        message: 'Please provide a valid email address'
+      })
+    }
+
+    // 检查当前用户是否已经是 Clerk 用户
+    if (user.provider === 'clerk') {
+      return res.status(400).json({
+        success: false,
+        error: 'Already migrated',
+        message: '您的账户已经是社交登录账户，无需迁移'
+      })
+    }
+
+    // 检查邮箱是否匹配当前用户
+    if (user.email.toLowerCase() !== email.toLowerCase()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email mismatch',
+        message: '邮箱地址与当前账户不匹配'
+      })
+    }
+
+    // 检查是否已存在对应的 Clerk 用户
+    const existingClerkUser = await userService.getUserByEmail(email)
+    if (existingClerkUser && existingClerkUser.provider === 'clerk') {
+      return res.status(409).json({
+        success: false,
+        error: 'Clerk user exists',
+        message: '该邮箱已被其他 Clerk 账户使用，无法迁移'
+      })
+    }
+
+    logger.info(`用户迁移检查: ${user.username} (${email}) - 可以迁移`)
+
+    res.json({
+      success: true,
+      message: '账户可以迁移到社交登录',
+      data: {
+        currentProvider: user.provider,
+        email: user.email,
+        username: user.username,
+        canMigrate: true
+      }
+    })
+  } catch (error) {
+    logger.error('❌ Check migration error:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Migration check failed',
+      message: '检查迁移状态失败，请稍后重试'
+    })
+  }
+})
+
+// 🔄 执行用户迁移到 Clerk
+router.post('/clerk/migrate', authenticateUser, async (req, res) => {
+  try {
+    const { clerkUserId, email, firstName, lastName, fullName, avatar, clerkToken } = req.body
+    const currentUser = req.user
+
+    // 验证必需字段
+    if (!clerkUserId || !email || !clerkToken) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        message: 'clerkUserId, email, and clerkToken are required'
+      })
+    }
+
+    // 验证邮箱格式
+    if (!inputValidator.isValidEmail(email)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid email',
+        message: 'Please provide a valid email address'
+      })
+    }
+
+    // 检查当前用户是否已经是 Clerk 用户
+    if (currentUser.provider === 'clerk') {
+      return res.status(400).json({
+        success: false,
+        error: 'Already migrated',
+        message: '您的账户已经是社交登录账户，无需迁移'
+      })
+    }
+
+    // 验证邮箱匹配
+    if (currentUser.email.toLowerCase() !== email.toLowerCase()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email mismatch',
+        message: '邮箱地址与当前账户不匹配'
+      })
+    }
+
+    // 验证 Clerk Token
+    const tokenValidation = await clerkService.verifyClerkToken(clerkToken)
+    if (!tokenValidation.valid) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid token',
+        message: 'Clerk token validation failed'
+      })
+    }
+
+    // 验证 token 中的用户ID与请求中的匹配
+    if (tokenValidation.userId !== clerkUserId) {
+      return res.status(401).json({
+        success: false,
+        error: 'Token mismatch',
+        message: 'Token user ID does not match request'
+      })
+    }
+
+    // 检查是否已存在相同 clerkUserId 的用户
+    const existingClerkUser = await userService.getUserByClerkId(clerkUserId)
+    if (existingClerkUser) {
+      return res.status(409).json({
+        success: false,
+        error: 'Clerk user exists',
+        message: '该 Clerk 账户已被其他用户关联'
+      })
+    }
+
+    logger.info(
+      `开始用户迁移: ${currentUser.username} (${currentUser.email}) -> Clerk ID: ${clerkUserId}`
+    )
+
+    // 执行迁移：更新现有用户记录
+    const migrationData = {
+      provider: 'clerk',
+      clerkUserId,
+      firstName: firstName || currentUser.firstName,
+      lastName: lastName || currentUser.lastName,
+      displayName: fullName || currentUser.displayName,
+      avatar: avatar || currentUser.avatar,
+      lastLoginAt: new Date(),
+      updatedAt: new Date()
+    }
+
+    const migratedUser = await userService.updateUser(currentUser.id, migrationData)
+
+    // 生成新的会话令牌
+    const sessionToken = clerkService.generateSessionToken(migratedUser)
+    await clerkService.storeUserSession(migratedUser.id, sessionToken)
+
+    logger.info(`用户迁移成功: ${currentUser.username} -> Clerk 用户 ${clerkUserId}`)
+
+    res.json({
+      success: true,
+      message: '账户迁移成功！您现在可以使用社交登录',
+      user: {
+        id: migratedUser.id,
+        username: migratedUser.username,
+        email: migratedUser.email,
+        displayName: migratedUser.displayName,
+        firstName: migratedUser.firstName,
+        lastName: migratedUser.lastName,
+        avatar: migratedUser.avatar,
+        role: migratedUser.role,
+        provider: migratedUser.provider,
+        clerkUserId: migratedUser.clerkUserId,
+        createdAt: migratedUser.createdAt,
+        lastLoginAt: migratedUser.lastLoginAt
+      },
+      sessionToken
+    })
+  } catch (error) {
+    logger.error('❌ User migration error:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Migration failed',
+      message: '账户迁移失败，请稍后重试'
+    })
+  }
+})
+
+// 📊 获取迁移统计信息（管理员接口）
+router.get('/clerk/migration-stats', requireAdmin, async (req, res) => {
+  try {
+    const stats = await userService.getMigrationStats()
+
+    res.json({
+      success: true,
+      data: {
+        totalUsers: stats.totalUsers || 0,
+        clerkUsers: stats.clerkUsers || 0,
+        localUsers: stats.localUsers || 0,
+        ldapUsers: stats.ldapUsers || 0,
+        migrationRate:
+          stats.totalUsers > 0
+            ? `${((stats.clerkUsers / stats.totalUsers) * 100).toFixed(2)}%`
+            : '0%',
+        recentMigrations: stats.recentMigrations || []
+      }
+    })
+  } catch (error) {
+    logger.error('❌ Get migration stats error:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Stats error',
+      message: '获取迁移统计失败'
+    })
+  }
+})
+
+// 🔧 批量检查用户迁移状态（管理员接口）
+router.post('/clerk/batch-check-migration', requireAdmin, async (req, res) => {
+  try {
+    const { userIds } = req.body
+
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid input',
+        message: 'userIds must be a non-empty array'
+      })
+    }
+
+    const migrationStatus = await userService.batchCheckMigrationStatus(userIds)
+
+    res.json({
+      success: true,
+      data: migrationStatus
+    })
+  } catch (error) {
+    logger.error('❌ Batch check migration error:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Batch check failed',
+      message: '批量检查迁移状态失败'
+    })
+  }
+})
+
+// 🚨 撤销用户迁移（管理员紧急接口）
+router.post('/clerk/revoke-migration', requireAdmin, async (req, res) => {
+  try {
+    const { userId, reason } = req.body
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing userId',
+        message: 'userId is required'
+      })
+    }
+
+    const user = await userService.getUserById(userId)
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+        message: '用户不存在'
+      })
+    }
+
+    if (user.provider !== 'clerk') {
+      return res.status(400).json({
+        success: false,
+        error: 'Not a Clerk user',
+        message: '该用户不是 Clerk 用户，无需撤销迁移'
+      })
+    }
+
+    logger.warn(`管理员撤销用户迁移: ${user.username} (${user.email}), 原因: ${reason || '未提供'}`)
+
+    // 撤销迁移：恢复为本地用户
+    const revertData = {
+      provider: 'local',
+      clerkUserId: null,
+      updatedAt: new Date()
+    }
+
+    const revertedUser = await userService.updateUser(userId, revertData)
+
+    // 撤销所有 Clerk 会话
+    const redisClient = redis.getClient()
+    const sessionKeys = await redisClient.smembers(`user_sessions:${userId}`)
+    if (sessionKeys.length > 0) {
+      await Promise.all(sessionKeys.map((token) => clerkService.revokeUserSession(token)))
+    }
+
+    res.json({
+      success: true,
+      message: '用户迁移已撤销，用户已恢复为本地账户',
+      user: {
+        id: revertedUser.id,
+        username: revertedUser.username,
+        email: revertedUser.email,
+        provider: revertedUser.provider,
+        clerkUserId: revertedUser.clerkUserId
+      }
+    })
+  } catch (error) {
+    logger.error('❌ Revoke migration error:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Revoke failed',
+      message: '撤销迁移失败'
     })
   }
 })

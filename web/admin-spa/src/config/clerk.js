@@ -6,7 +6,7 @@
 // Clerk 配置常量
 export const CLERK_CONFIG = {
   // Clerk 应用公钥 (从环境变量获取)
-  publishableKey: import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+  publishableKey: import.meta.env.CLERK_PUBLISHABLE_KEY,
 
   // 本地化配置 - 中文支持
   localization: {
@@ -134,7 +134,7 @@ export const CLERK_FEATURES = {
 // 验证配置是否完整
 export function validateClerkConfig() {
   if (!CLERK_CONFIG.publishableKey) {
-    console.warn('Clerk: 缺少 VITE_CLERK_PUBLISHABLE_KEY 环境变量')
+    console.warn('Clerk: 缺少 CLERK_PUBLISHABLE_KEY 环境变量')
     return false
   }
 

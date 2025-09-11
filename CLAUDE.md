@@ -85,7 +85,7 @@ Claude Relay Service 是一个功能完整的 AI API 中转服务，支持 Claud
 
 ### 基本开发命令
 
-````bash
+```bash
 # 安装依赖和初始化
 npm install
 npm run setup                  # 生成配置和管理员凭据
@@ -140,6 +140,7 @@ npm run test:pricing-fallback # 测试价格回退机制
 npm run monitor               # 增强监控脚本
 npm run status                # 统一状态检查
 npm run status:detail         # 详细状态信息
+```
 
 ### 开发环境配置
 必须配置的环境变量：
@@ -159,7 +160,7 @@ npm run status:detail         # 详细状态信息
 cp config/config.example.js config/config.js
 cp .env.example .env
 npm run setup  # 自动生成密钥并创建管理员账户
-````
+```
 
 ## Web界面功能
 
@@ -451,10 +452,3 @@ npm run cli admin reset-password -- --username admin
 npm run cli redis stats           # Redis统计信息
 npm run cli usage summary          # 使用情况汇总
 ```
-
-# important-instruction-reminders
-
-Do what has been asked; nothing more, nothing less.
-NEVER create files unless they're absolutely necessary for achieving your goal.
-ALWAYS prefer editing an existing file to creating a new one.
-NEVER proactively create documentation files (\*.md) or README files. Only create documentation files if explicitly requested by the User.

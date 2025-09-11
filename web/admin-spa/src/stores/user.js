@@ -280,6 +280,57 @@ export const useUserStore = defineStore('user', {
       }
     },
 
+    // 🔐 Clerk 认证（用于 clerk.js store）
+    async authenticateWithClerk(clerkData) {
+      this.loading = true
+      try {
+        const response = await axios.post(`${API_BASE}/users/clerk/auth`, clerkData)
+
+        if (response.data.success) {
+          await this.setClerkUserData(response.data.user, response.data.sessionToken)
+          return response.data
+        } else {
+          throw new Error(response.data.message || 'Clerk 认证失败')
+        }
+      } catch (error) {
+        this.clearAuth()
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    // 🎯 设置 Clerk 用户数据（用于 clerk.js store）
+    async setClerkUserData(userData, sessionToken) {
+      try {
+        this.user = userData
+        this.sessionToken = sessionToken
+        this.isAuthenticated = true
+        this.authProvider = 'clerk'
+
+        // 设置 Clerk 集成信息
+        this.clerkIntegration = {
+          isEnabled: true,
+          clerkUserId: userData.clerkUserId,
+          oauthProvider: userData.provider
+        }
+
+        // 保存到 localStorage
+        localStorage.setItem('userToken', this.sessionToken)
+        localStorage.setItem('userData', JSON.stringify(this.user))
+        localStorage.setItem('authProvider', this.authProvider)
+        localStorage.setItem('clerkIntegration', JSON.stringify(this.clerkIntegration))
+
+        // 设置认证头部
+        this.setAuthHeader()
+
+        return true
+      } catch (error) {
+        console.error('设置 Clerk 用户数据失败:', error)
+        throw error
+      }
+    },
+
     // 🧹 清除认证信息（扩展支持 Clerk）
     clearAuth() {
       this.user = null

@@ -1,685 +1,421 @@
 /**
- * Clerk 认证状态管理 Store
+ * Clerk 认证状态管理 Store (优化版)
  * 专门处理 Clerk OAuth 社交登录相关的状态和逻辑
  * 与现有的 user store 协作，提供统一的用户认证体验
+ * 支持 Modal 方式登录，无需页面跳转
  */
 
 import { defineStore } from 'pinia'
-import { ref, computed, readonly, watch } from 'vue'
-import { ElMessage, ElLoading } from 'element-plus'
+import { ref, computed, watch } from 'vue'
+import { showToast } from '@/utils/toast'
 import { useUserStore } from './user'
-import { OAUTH_PROVIDERS, CLERK_ERROR_MESSAGES } from '@/config/clerk'
 import axios from 'axios'
 
+const API_BASE = '/webapi'
+
 export const useClerkStore = defineStore('clerk', () => {
-  // ========== 响应式数据 ==========
-
-  // Clerk 初始化状态
-  const isClerkReady = ref(false)
-  const isClerkLoading = ref(true)
-
-  // 用户认证状态
-  const isAuthenticated = ref(false)
-  const isSigningIn = ref(false)
-  const isSigningOut = ref(false)
-
-  // Clerk 用户信息
-  const clerkUser = ref(null)
-  const clerkSession = ref(null)
-  const clerkToken = ref(null)
-
-  // OAuth 提供商状态
-  const availableProviders = ref(Object.keys(OAUTH_PROVIDERS))
-  const activeProvider = ref(null)
-
-  // 错误状态管理
-  const lastError = ref(null)
-  const errorCount = ref(0)
-  const connectionError = ref(null)
-  const isNetworkError = ref(false)
-
-  // ========== Clerk 实例管理 ==========
-
+  // ========== 核心状态 ==========
+  
+  // 初始化状态
+  const isInitialized = ref(false)
+  const isLoading = ref(false)
+  const error = ref(null)
+  
+  // Clerk 客户端实例
   let clerkInstance = null
-  let userInstance = null
-
-  // 设置 Clerk 实例（由组件调用）
-  function setClerkInstance(clerk, user) {
-    // 防止重复设置
-    if (clerkInstance && clerkInstance === clerk) {
-      console.log('Clerk Store: 实例已设置，跳过重复设置')
-      return
-    }
-
-    clerkInstance = clerk
-    userInstance = user
-    console.log('Clerk Store: 接收到实例', {
-      hasClerkInstance: !!clerkInstance,
-      hasUserInstance: !!userInstance,
-      clerkLoaded: clerkInstance?.loaded
-    })
-
-    // 检查是否需要使用全局 Clerk 实例作为回退
-    if (!clerkInstance || typeof clerkInstance.loaded === 'undefined') {
-      console.log('Clerk Store: Vue实例不可用，尝试使用全局 window.Clerk')
-      if (typeof window !== 'undefined' && window.Clerk) {
-        clerkInstance = window.Clerk
-        console.log('Clerk Store: 已回退到全局 Clerk 实例', {
-          loaded: clerkInstance.loaded,
-          hasOpenSignIn: typeof clerkInstance.openSignIn === 'function'
-        })
-      }
-    }
-
-    if (clerkInstance && userInstance) {
-      console.log('Clerk Store: 检查Clerk加载状态', {
-        loaded: clerkInstance.loaded,
-        hasAddOnLoaded: typeof clerkInstance.addOnLoaded === 'function',
-        availableMethods: Object.getOwnPropertyNames(clerkInstance)
-          .filter((name) => typeof clerkInstance[name] === 'function')
-          .slice(0, 10)
-      })
-
-      // 修改检测逻辑：如果 loaded 是 undefined，等待初始化
-      if (clerkInstance.loaded === true) {
-        isClerkReady.value = true
-        isClerkLoading.value = false
-        setupWatchers()
-        console.log('Clerk Store: 成功初始化（已加载）')
-      } else if (typeof clerkInstance.addOnLoaded === 'function') {
-        console.log('Clerk Store: 等待 Clerk 加载完成...')
-        clerkInstance.addOnLoaded(() => {
-          isClerkReady.value = true
-          isClerkLoading.value = false
-          setupWatchers()
-          console.log('Clerk Store: 成功初始化（加载完成）')
-        })
-      } else {
-        // 如果 loaded 是 undefined 或没有 addOnLoaded 方法，延迟初始化
-        console.log('Clerk Store: 延迟初始化等待 Clerk 完全加载')
-
-        // 轮询检查 Clerk 是否完全加载
-        let attempts = 0
-        const maxAttempts = 50 // 10秒内轮询
-
-        const waitForClerkReady = () => {
-          attempts++
-          console.log(`Clerk Store: 等待加载完成 (${attempts}/${maxAttempts})`, {
-            loaded: clerkInstance?.loaded,
-            user: userInstance?.user
-          })
-
-          // 检查是否有网络连接错误（从第5次尝试开始检测）
-          if (attempts >= 5) {
-            const hasNetworkError = checkNetworkErrors()
-            if (hasNetworkError) {
-              console.error('Clerk Store: 检测到网络连接错误', {
-                attempts,
-                failedRequests: performance
-                  .getEntries()
-                  .filter(
-                    (entry) =>
-                      entry.name &&
-                      (entry.name.includes('clerk') || entry.name.includes('accounts.dev')) &&
-                      (entry.transferSize === 0 || entry.responseEnd === 0)
-                  ).length
-              })
-              isClerkLoading.value = false
-              isNetworkError.value = true
-              isClerkReady.value = false
-              connectionError.value = new Error('无法连接到Clerk服务器，请检查网络连接')
-              return
-            }
-          }
-
-          // 检查 Clerk 是否完全初始化（通过检查是否有用户数据或loaded状态为true）
-          if (clerkInstance?.loaded === true || userInstance?.user !== undefined) {
-            // 延迟检查网络错误，给网络请求一些时间完成
-            setTimeout(() => {
-              // 重新检查全局 Clerk 状态，它可能现在已经加载完成了
-              if (typeof window !== 'undefined' && window.Clerk && window.Clerk.loaded) {
-                console.log('Clerk Store: 延迟检查发现全局 Clerk 已加载完成，取消网络错误状态')
-                isClerkLoading.value = false
-                isNetworkError.value = false
-                connectionError.value = null
-                isClerkReady.value = true
-
-                // 更新实例引用
-                if (!clerkInstance || typeof clerkInstance.loaded === 'undefined') {
-                  clerkInstance = window.Clerk
-                }
-                return
-              }
-
-              const hasNetworkError = checkNetworkErrors()
-              if (hasNetworkError && (isClerkReady.value || isClerkLoading.value)) {
-                console.error(
-                  'Clerk Store: 虽然有用户数据，但检测到网络连接错误，将状态设置为网络错误'
-                )
-                isClerkLoading.value = false
-                isNetworkError.value = true
-                isClerkReady.value = false
-                connectionError.value = new Error('网络连接异常，社交登录功能不可用')
-              }
-            }, 2000) // 2秒后检查网络状态
-
-            isClerkReady.value = true
-            isClerkLoading.value = false
-            isNetworkError.value = false
-            connectionError.value = null
-            setupWatchers()
-            console.log('Clerk Store: 延迟初始化成功，将在2秒后检查网络状态')
-            return
-          }
-
-          if (attempts >= maxAttempts) {
-            console.error('Clerk Store: 初始化超时')
-            isClerkLoading.value = false
-            lastError.value = new Error('Clerk 初始化超时')
-            return
-          }
-
-          setTimeout(waitForClerkReady, 200)
-        }
-
-        waitForClerkReady()
-      }
-    }
-  }
-
-  // 初始化 Clerk 实例（现在仅设置加载状态）
-  function initializeClerk() {
-    // 如果已经成功初始化，不要重置状态
-    if (isClerkReady.value) {
-      console.log('Clerk Store: 已成功初始化，跳过重复初始化')
-      return
-    }
-
-    // 检查全局 Clerk 是否已经可用
-    if (typeof window !== 'undefined' && window.Clerk && window.Clerk.loaded) {
-      console.log('Clerk Store: 检测到全局 Clerk 已加载，直接使用')
-      clerkInstance = window.Clerk
-      isClerkReady.value = true
-      isClerkLoading.value = false
-      isNetworkError.value = false
-      connectionError.value = null
-      console.log('Clerk Store: 全局 Clerk 实例初始化成功')
-      return
-    }
-
-    console.log('Clerk Store: 开始初始化，等待组件传递实例')
-    isClerkLoading.value = true
-    isClerkReady.value = false
-  }
+  
+  // 用户状态
+  const clerkUser = ref(null)
+  const isSignedIn = ref(false)
+  const sessionToken = ref(null)
+  
+  // 同步状态
+  const isSyncing = ref(false)
+  const syncError = ref(null)
+  const lastSyncTime = ref(null)
+  
+  // 配置状态
+  const config = ref({
+    publishableKey: import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+    enabled: !!import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
+  })
 
   // ========== 计算属性 ==========
-
-  // 当前用户信息（格式化后）
+  
+  const isAuthenticated = computed(() => isSignedIn.value && !!clerkUser.value)
+  
   const currentUser = computed(() => {
     if (!clerkUser.value) return null
-
+    
     return {
       id: clerkUser.value.id,
       email: clerkUser.value.primaryEmailAddress?.emailAddress,
       firstName: clerkUser.value.firstName,
       lastName: clerkUser.value.lastName,
-      fullName: `${clerkUser.value.firstName || ''} ${clerkUser.value.lastName || ''}`.trim(),
+      fullName: clerkUser.value.fullName,
       avatar: clerkUser.value.imageUrl,
-      provider: getAuthProvider(clerkUser.value),
       createdAt: clerkUser.value.createdAt,
-      lastActiveAt: clerkUser.value.lastActiveAt
+      updatedAt: clerkUser.value.updatedAt,
+      lastSignInAt: clerkUser.value.lastSignInAt
     }
   })
-
-  // 是否有有效的会话
-  const hasValidSession = computed(() => {
-    return isAuthenticated.value && clerkSession.value && clerkToken.value
+  
+  const authProvider = computed(() => {
+    if (!clerkUser.value?.externalAccounts?.length) return null
+    return clerkUser.value.externalAccounts[0]?.provider || 'unknown'
   })
 
-  // 认证提供商信息
-  const authProviderInfo = computed(() => {
-    if (!activeProvider.value || !OAUTH_PROVIDERS[activeProvider.value]) {
-      return null
-    }
-    return OAUTH_PROVIDERS[activeProvider.value]
-  })
+  // ========== 核心方法 ==========
 
-  // ========== 监听器设置 ==========
-
-  function setupWatchers() {
-    // 监听用户状态变化
-    watch(
-      () => userInstance?.user,
-      (newUser) => {
-        console.log('Clerk Store: 用户状态变化', {
-          newUser,
-          hasEmail: newUser?.primaryEmailAddress?.emailAddress
-        })
-        clerkUser.value = newUser
-        isAuthenticated.value = !!newUser
-
-        if (newUser && newUser.primaryEmailAddress?.emailAddress) {
-          // 只有在用户有完整信息时才同步
-          console.log('Clerk Store: 检测到完整用户信息，开始同步')
-          updateSessionInfo()
-          syncWithUserStore()
-        } else if (newUser) {
-          // 用户对象存在但信息不完整，仅更新会话
-          console.log('Clerk Store: 用户信息不完整，仅更新会话')
-          updateSessionInfo()
-        } else {
-          clearSessionInfo()
-        }
-      },
-      { immediate: true }
-    )
-
-    // 监听会话变化
-    watch(
-      () => clerkInstance?.session,
-      (newSession) => {
-        clerkSession.value = newSession
-        if (newSession) {
-          updateTokenInfo()
-        }
-      },
-      { immediate: true }
-    )
-  }
-
-  // ========== 核心认证方法 ==========
-
-  /**
-   * 使用指定提供商登录
-   * @param {string} provider - OAuth 提供商 (google, github 等)
-   * @param {Object} options - 登录选项
-   */
-  async function signInWithProvider(provider = 'google', options = {}) {
-    if (!isClerkReady.value) {
-      throw new Error('Clerk 尚未初始化完成')
+  // 初始化 Clerk
+  const initialize = async () => {
+    if (!config.value.enabled) {
+      console.warn('Clerk: 配置未启用')
+      return false
     }
 
-    if (!OAUTH_PROVIDERS[provider]) {
-      throw new Error(`不支持的 OAuth 提供商: ${provider}`)
-    }
-
-    isSigningIn.value = true
-    activeProvider.value = provider
-    lastError.value = null
-
-    // 显示加载提示
-    const loading = ElLoading.service({
-      lock: true,
-      text: `正在使用 ${OAUTH_PROVIDERS[provider].displayName} 登录...`,
-      spinner: 'el-icon-loading'
-    })
-
-    try {
-      // 调用 Clerk 的 OAuth 登录 - 使用 openSignIn 方法
-      console.log(`Clerk Store: 准备启动 ${provider} OAuth 登录`)
-      console.log('Clerk实例方法检查:', {
-        hasOpenSignIn: typeof clerkInstance.openSignIn,
-        hasRedirectToSignIn: typeof clerkInstance.redirectToSignIn
-      })
-
-      if (typeof clerkInstance.openSignIn === 'function') {
-        // 使用 openSignIn 方法打开登录弹窗
-        console.log(`Clerk Store: 使用 openSignIn 方法启动 ${provider} 登录`)
-        clerkInstance.openSignIn({
-          redirectUrl: options.afterSignInUrl || '/user-dashboard',
-          routing: 'path'
-        })
-      } else if (typeof clerkInstance.redirectToSignIn === 'function') {
-        // 使用 redirectToSignIn 方法
-        console.log(`Clerk Store: 使用 redirectToSignIn 方法启动 ${provider} 登录`)
-        clerkInstance.redirectToSignIn({
-          redirectUrl: options.afterSignInUrl || '/user-dashboard'
-        })
-      } else {
-        throw new Error(`Clerk 实例没有可用的登录方法`)
-      }
-
-      console.log(`Clerk Store: ${provider} OAuth 登录流程已启动`)
-    } catch (error) {
-      console.error(`Clerk Store: ${provider} 登录失败`, error)
-
-      isSigningIn.value = false
-      activeProvider.value = null
-      lastError.value = error
-      errorCount.value++
-
-      // 显示用户友好的错误消息
-      const errorMessage = getErrorMessage(error)
-      ElMessage.error(errorMessage)
-
-      throw error
-    } finally {
-      loading.close()
-    }
-  }
-
-  /**
-   * 处理 OAuth 回调
-   * 在回调页面中调用此方法来完成认证流程
-   */
-  async function handleOAuthCallback() {
-    if (!isClerkReady.value) {
-      throw new Error('Clerk 尚未初始化完成')
+    if (isInitialized.value) {
+      return clerkInstance
     }
 
     try {
-      // Clerk 会自动处理 OAuth 回调
-      // 我们只需要等待用户状态更新
-      await new Promise((resolve) => {
-        const unwatch = watch(
-          () => isAuthenticated.value,
-          (newValue) => {
-            if (newValue) {
-              unwatch()
-              resolve()
+      isLoading.value = true
+      error.value = null
+
+      // 动态导入 Clerk SDK
+      const { Clerk } = await import('@clerk/clerk-js')
+      
+      clerkInstance = new Clerk(config.value.publishableKey)
+      
+      // 加载 Clerk
+      await clerkInstance.load({
+        // 优化配置
+        appearance: {
+          elements: {
+            modalBackdrop: 'backdrop-blur-sm bg-black/50',
+            card: 'shadow-2xl rounded-xl border-0',
+            headerTitle: 'text-xl font-semibold text-gray-900 dark:text-white',
+            headerSubtitle: 'text-sm text-gray-600 dark:text-gray-400 mt-1',
+            socialButtonsBlockButton: 'h-11 font-medium transition-all duration-200 rounded-lg border border-gray-300 hover:border-gray-400 dark:border-gray-600 dark:hover:border-gray-500',
+            socialButtonsBlockButtonText: 'font-medium text-sm',
+            formButtonPrimary: 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500 transition-colors duration-200 rounded-lg',
+            footer: 'hidden',
+            footerAction: 'hidden'
+          },
+          variables: {
+            colorPrimary: '#1677ff',
+            colorSuccess: '#67c23a',
+            colorWarning: '#e6a23c',
+            colorDanger: '#f56c6c',
+            borderRadius: '8px',
+            fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+          },
+          layout: {
+            socialButtonsPlacement: 'top',
+            socialButtonsVariant: 'blockButton',
+            showOptionalFields: false
+          }
+        },
+        localization: {
+          signIn: {
+            start: {
+              title: '登录到 ViliCode',
+              subtitle: '使用您的账号登录'
             }
           }
-        )
-
-        // 设置超时防止无限等待
-        setTimeout(() => {
-          unwatch()
-          resolve()
-        }, 10000)
+        }
       })
 
-      if (isAuthenticated.value) {
-        console.log('Clerk Store: OAuth 回调处理成功')
-        await syncWithUserStore()
-        return true
-      } else {
-        throw new Error('OAuth 回调处理超时')
-      }
-    } catch (error) {
-      console.error('Clerk Store: OAuth 回调处理失败', error)
-      lastError.value = error
-      throw error
+      // 设置状态
+      isInitialized.value = true
+      clerkUser.value = clerkInstance.user
+      isSignedIn.value = !!clerkInstance.user
+      sessionToken.value = await clerkInstance.session?.getToken()
+
+      // 设置事件监听器
+      setupEventListeners()
+
+      console.log('Clerk: 初始化成功')
+      return clerkInstance
+
+    } catch (err) {
+      console.error('Clerk: 初始化失败:', err)
+      error.value = err.message
+      throw err
+    } finally {
+      isLoading.value = false
     }
   }
 
-  /**
-   * 登出用户
-   */
-  async function signOut() {
-    if (!isClerkReady.value || !isAuthenticated.value) {
-      return
+  // 设置事件监听器
+  const setupEventListeners = () => {
+    if (!clerkInstance) return
+
+    // 监听用户状态变化
+    clerkInstance.addListener(({ user, session }) => {
+      console.log('Clerk: 状态变化', { user: !!user, session: !!session })
+      
+      clerkUser.value = user
+      isSignedIn.value = !!user && !!session
+      
+      if (session) {
+        session.getToken().then(token => {
+          sessionToken.value = token
+        }).catch(err => {
+          console.error('Clerk: 获取 token 失败:', err)
+        })
+      } else {
+        sessionToken.value = null
+      }
+
+      // 如果用户登录且未同步，自动同步
+      if (user && session && !isSyncing.value) {
+        syncUserToBackend()
+      }
+    })
+  }
+
+  // 打开登录 Modal
+  const openSignIn = async (options = {}) => {
+    try {
+      if (!isInitialized.value) {
+        await initialize()
+      }
+
+      if (!clerkInstance) {
+        throw new Error('Clerk 未初始化')
+      }
+
+      // 检查是否已登录
+      if (clerkInstance.user) {
+        console.log('Clerk: 用户已登录，直接同步')
+        await syncUserToBackend()
+        return
+      }
+
+      isLoading.value = true
+
+      // 打开登录 Modal
+      await clerkInstance.openSignIn({
+        routing: 'virtual',
+        redirectUrl: window.location.origin + '/user-dashboard',
+        ...options
+      })
+
+    } catch (err) {
+      console.error('Clerk: 打开登录失败:', err)
+      error.value = err.message
+      showToast('登录失败，请重试', 'error')
+      throw err
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  // 同步用户数据到后端
+  const syncUserToBackend = async (forceSync = false) => {
+    if (!isSignedIn.value || !clerkUser.value) {
+      console.warn('Clerk: 无有效用户，跳过同步')
+      return null
     }
 
-    isSigningOut.value = true
+    if (isSyncing.value && !forceSync) {
+      console.log('Clerk: 同步正在进行中')
+      return null
+    }
 
     try {
-      // 调用 Clerk 登出
-      await clerkInstance.signOut()
+      isSyncing.value = true
+      syncError.value = null
 
-      // 清理本地状态
-      clearSessionInfo()
+      // 获取最新的 session token
+      if (!sessionToken.value && clerkInstance?.session) {
+        sessionToken.value = await clerkInstance.session.getToken()
+      }
 
-      // 同步到用户 store
+      if (!sessionToken.value) {
+        throw new Error('无法获取认证令牌')
+      }
+
+      // 准备用户数据
+      const userData = {
+        clerkUserId: clerkUser.value.id,
+        clerkToken: sessionToken.value,
+        email: clerkUser.value.primaryEmailAddress?.emailAddress,
+        firstName: clerkUser.value.firstName,
+        lastName: clerkUser.value.lastName,
+        fullName: clerkUser.value.fullName,
+        avatar: clerkUser.value.imageUrl,
+        provider: authProvider.value,
+        lastSignInAt: clerkUser.value.lastSignInAt
+      }
+
+      console.log('Clerk: 开始同步用户数据')
+
+      // 调用后端同步接口
+      const response = await axios.post(`${API_BASE}/users/clerk/auth`, userData)
+
+      if (response.data.success) {
+        // 更新本地用户状态
+        const userStore = useUserStore()
+        await userStore.setClerkUserData(response.data.user, response.data.sessionToken)
+        
+        lastSyncTime.value = new Date()
+        
+        console.log('Clerk: 用户同步成功')
+        showToast('登录成功！', 'success')
+        
+        return response.data
+      } else {
+        throw new Error(response.data.message || '同步失败')
+      }
+
+    } catch (err) {
+      console.error('Clerk: 用户同步失败:', err)
+      syncError.value = err.message
+      
+      // 同步失败时显示错误，但不自动登出
+      showToast(err.response?.data?.message || err.message || '登录失败，请重试', 'error')
+      
+      throw err
+    } finally {
+      isSyncing.value = false
+    }
+  }
+
+  // 登出
+  const signOut = async (redirectUrl = '/user-login') => {
+    try {
+      isLoading.value = true
+
+      // Clerk 登出
+      if (clerkInstance?.user) {
+        await clerkInstance.signOut()
+      }
+
+      // 清理状态
+      clerkUser.value = null
+      isSignedIn.value = false
+      sessionToken.value = null
+      syncError.value = null
+      lastSyncTime.value = null
+
+      // 清理本地用户状态
       const userStore = useUserStore()
       await userStore.logout()
 
-      ElMessage.success('已成功退出登录')
-      console.log('Clerk Store: 用户已成功登出')
-    } catch (error) {
-      console.error('Clerk Store: 登出失败', error)
-      ElMessage.error('登出时发生错误')
-      throw error
+      showToast('已成功退出登录', 'success')
+
+      // 重定向
+      if (redirectUrl) {
+        window.location.href = redirectUrl
+      }
+
+    } catch (err) {
+      console.error('Clerk: 登出失败:', err)
+      showToast('登出失败，请重试', 'error')
+      throw err
     } finally {
-      isSigningOut.value = false
+      isLoading.value = false
     }
   }
 
-  // ========== 数据同步方法 ==========
-
-  /**
-   * 将 Clerk 用户数据同步到后端和用户 store
-   */
-  async function syncWithUserStore() {
-    if (!currentUser.value) {
-      console.warn('Clerk Store: 无用户数据需要同步')
-      return
-    }
-
-    try {
-      // 获取最新的认证 Token
-      await updateTokenInfo()
-
-      if (!clerkToken.value) {
-        throw new Error('无法获取 Clerk 认证 Token')
-      }
-
-      // 准备同步到后端的用户数据
-      const syncData = {
-        clerkUserId: currentUser.value.id,
-        email: currentUser.value.email,
-        firstName: currentUser.value.firstName,
-        lastName: currentUser.value.lastName,
-        fullName: currentUser.value.fullName,
-        avatar: currentUser.value.avatar,
-        provider: currentUser.value.provider,
-        clerkToken: clerkToken.value
-      }
-
-      // 调用后端 API 同步用户数据
-      const response = await axios.post('/webapi/users/clerk/sync', syncData)
-
-      if (response.data.success) {
-        // 更新用户 store 的数据
-        const userStore = useUserStore()
-        await userStore.setUserData({
-          ...response.data.user,
-          authProvider: 'clerk',
-          sessionToken: response.data.sessionToken
-        })
-
-        console.log('Clerk Store: 用户数据同步成功')
-        ElMessage.success('登录成功，欢迎回来！')
-      } else {
-        throw new Error(response.data.message || '用户数据同步失败')
-      }
-    } catch (error) {
-      console.error('Clerk Store: 用户数据同步失败', error)
-
-      // 如果是网络错误，提示用户重试
-      if (error.code === 'NETWORK_ERROR') {
-        ElMessage.error('网络连接错误，请稍后重试')
-      } else {
-        ElMessage.error('用户数据同步失败，请联系管理员')
-      }
-
-      throw error
-    }
-  }
-
-  /**
-   * 获取当前 Clerk Token
-   */
-  async function getClerkToken() {
-    if (!isAuthenticated.value || !clerkSession.value) {
+  // 刷新用户数据
+  const refreshUser = async () => {
+    if (!clerkInstance?.user) {
       return null
     }
 
     try {
-      const token = await clerkSession.value.getToken()
-      return token
-    } catch (error) {
-      console.error('Clerk Store: 获取 Token 失败', error)
-      return null
+      // 重新加载用户数据
+      await clerkInstance.user.reload()
+      clerkUser.value = clerkInstance.user
+      
+      // 重新同步到后端
+      return await syncUserToBackend(true)
+    } catch (err) {
+      console.error('Clerk: 刷新用户数据失败:', err)
+      throw err
     }
   }
 
-  // ========== 网络连接检查 ==========
-
-  /**
-   * 检查是否有网络连接错误
-   */
-  function checkNetworkErrors() {
-    // 首先检查全局 Clerk 是否可用并已加载
-    if (typeof window !== 'undefined' && window.Clerk && window.Clerk.loaded) {
-      console.log('Clerk Store: 全局 Clerk 已加载，跳过网络错误检查')
-      return false
+  // 获取服务状态
+  const getServiceStatus = () => {
+    return {
+      enabled: config.value.enabled,
+      initialized: isInitialized.value,
+      authenticated: isAuthenticated.value,
+      loading: isLoading.value,
+      syncing: isSyncing.value,
+      lastSync: lastSyncTime.value,
+      error: error.value || syncError.value
     }
-
-    // 检查性能条目中是否有 Clerk 相关的失败请求
-    const performanceEntries = performance.getEntries()
-    const failedRequests = performanceEntries.filter(
-      (entry) =>
-        entry.name &&
-        (entry.name.includes('clerk') ||
-          entry.name.includes('accounts.dev') ||
-          entry.name.includes('js.clerk.dev')) &&
-        (entry.transferSize === 0 || entry.responseEnd === 0 || entry.duration === 0)
-    )
-
-    // 检查是否有 JavaScript 错误（通过检查 window.onerror 或其他方式）
-    const hasJSErrors = window.hasClerkErrors || false
-
-    // 尝试检查网络状态
-    const isOnline = navigator.onLine
-
-    console.log('Clerk Store: 网络错误检查', {
-      windowClerkLoaded: window.Clerk?.loaded,
-      failedRequestsCount: failedRequests.length,
-      failedRequests: failedRequests.map((r) => ({
-        name: r.name,
-        transferSize: r.transferSize,
-        responseEnd: r.responseEnd
-      })),
-      hasJSErrors,
-      isOnline
-    })
-
-    return failedRequests.length > 0 || !isOnline
   }
 
-  /**
-   * 测试网络连接到 Clerk 服务
-   */
-  async function testClerkConnectivity() {
+  // 检查网络状态
+  const checkNetworkStatus = async () => {
     try {
-      // 尝试连接 Clerk CDN
-      // eslint-disable-next-line no-unused-vars
-      const _response = await fetch('https://js.clerk.dev/v4/clerk.browser.js', {
+      const response = await fetch('https://api.clerk.dev/health', {
         method: 'HEAD',
-        mode: 'no-cors',
-        timeout: 5000
+        mode: 'no-cors'
       })
       return true
-    } catch (error) {
-      console.error('Clerk connectivity test failed:', error)
+    } catch {
       return false
     }
   }
 
-  // ========== 辅助方法 ==========
-
-  /**
-   * 更新会话信息
-   */
-  async function updateSessionInfo() {
-    try {
-      clerkSession.value = clerkInstance?.session || null
-      await updateTokenInfo()
-    } catch (error) {
-      console.error('Clerk Store: 更新会话信息失败', error)
-    }
-  }
-
-  /**
-   * 更新 Token 信息
-   */
-  async function updateTokenInfo() {
-    try {
-      if (clerkSession.value) {
-        clerkToken.value = await clerkSession.value.getToken()
+  // 重试机制
+  const retryOperation = async (operation, maxRetries = 3, delay = 1000) => {
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        return await operation()
+      } catch (err) {
+        if (i === maxRetries - 1) throw err
+        
+        console.warn(`Clerk: 操作失败，${delay}ms 后重试 (${i + 1}/${maxRetries})`)
+        await new Promise(resolve => setTimeout(resolve, delay))
+        delay *= 2 // 指数退避
       }
-    } catch (error) {
-      console.error('Clerk Store: 更新 Token 失败', error)
-      clerkToken.value = null
     }
   }
 
-  /**
-   * 清理会话信息
-   */
-  function clearSessionInfo() {
-    isAuthenticated.value = false
-    clerkUser.value = null
-    clerkSession.value = null
-    clerkToken.value = null
-    activeProvider.value = null
+  // 监听网络状态
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', () => {
+      if (isSignedIn.value && !isSyncing.value) {
+        console.log('Clerk: 网络重连，重新同步用户数据')
+        syncUserToBackend()
+      }
+    })
   }
-
-  /**
-   * 获取用户的认证提供商
-   */
-  function getAuthProvider(user) {
-    if (!user || !user.externalAccounts || user.externalAccounts.length === 0) {
-      return 'email'
-    }
-
-    return user.externalAccounts[0].provider || 'unknown'
-  }
-
-  /**
-   * 获取友好的错误消息
-   */
-  function getErrorMessage(error) {
-    const errorCode = error?.code || error?.type || 'clerk_error_generic'
-    return CLERK_ERROR_MESSAGES[errorCode] || CLERK_ERROR_MESSAGES['clerk_error_generic']
-  }
-
-  /**
-   * 重置错误状态
-   */
-  function clearError() {
-    lastError.value = null
-  }
-
-  // ========== 返回 Store 接口 ==========
 
   return {
     // 状态
-    isClerkReady: readonly(isClerkReady),
-    isClerkLoading: readonly(isClerkLoading),
-    isAuthenticated: readonly(isAuthenticated),
-    isSigningIn: readonly(isSigningIn),
-    isSigningOut: readonly(isSigningOut),
+    isInitialized,
+    isLoading,
+    error,
+    clerkUser,
+    isSignedIn,
+    sessionToken,
+    isSyncing,
+    syncError,
+    lastSyncTime,
+    config,
+
+    // 计算属性
+    isAuthenticated,
     currentUser,
-    hasValidSession,
-    authProviderInfo,
-    availableProviders: readonly(availableProviders),
-    lastError: readonly(lastError),
-    errorCount: readonly(errorCount),
-    connectionError: readonly(connectionError),
-    isNetworkError: readonly(isNetworkError),
+    authProvider,
 
     // 方法
-    initializeClerk,
-    setClerkInstance,
-    signInWithProvider,
-    handleOAuthCallback,
+    initialize,
+    openSignIn,
+    syncUserToBackend,
     signOut,
-    syncWithUserStore,
-    getClerkToken,
-    clearError,
-    testClerkConnectivity
+    refreshUser,
+    getServiceStatus,
+    checkNetworkStatus,
+    retryOperation
   }
 })
-
-// 导出一个初始化函数，供 main.js 使用
-export function initializeClerkStore() {
-  const clerkStore = useClerkStore()
-
-  // 延迟初始化，确保 Clerk 插件已经加载
-  setTimeout(() => {
-    clerkStore.initializeClerk()
-  }, 100)
-
-  return clerkStore
-}

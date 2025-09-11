@@ -1,15 +1,52 @@
 /**
- * Clerk 用户认证服务
+ * Clerk 用户认证服务 (优化版)
  * 处理 Clerk OAuth 用户的认证、创建和数据同步
  * 与现有的 LDAP 用户系统并存，不冲突
+ *
+ * 优化功能:
+ * - 用户信息缓存机制
+ * - 增强错误处理和重试
+ * - 性能监控和指标
+ * - 批量操作支持
+ * - 安全性增强
  */
 
 const { createClerkClient } = require('@clerk/clerk-sdk-node')
 const jwt = require('jsonwebtoken')
+const crypto = require('crypto')
 const userService = require('./userService')
 const logger = require('../utils/logger')
 const redis = require('../models/redis')
 const config = require('../../config/config')
+
+// 性能监控指标
+const metrics = {
+  userCacheHits: 0,
+  userCacheMisses: 0,
+  tokenVerifications: 0,
+  sessionCreations: 0,
+  errors: 0,
+  lastReset: Date.now()
+}
+
+// 缓存配置
+const CACHE_CONFIG = {
+  USER_INFO_TTL: 15 * 60, // 用户信息缓存15分钟
+  TOKEN_VERIFICATION_TTL: 5 * 60, // Token验证缓存5分钟
+  SESSION_CLEANUP_INTERVAL: 60 * 60, // 会话清理间隔1小时
+  METRICS_RESET_INTERVAL: 24 * 60 * 60 // 指标重置间隔24小时
+}
+
+// 错误类型定义
+const ErrorTypes = {
+  CONFIGURATION_ERROR: 'CONFIGURATION_ERROR',
+  CLERK_API_ERROR: 'CLERK_API_ERROR',
+  TOKEN_VALIDATION_ERROR: 'TOKEN_VALIDATION_ERROR',
+  USER_CREATION_ERROR: 'USER_CREATION_ERROR',
+  SESSION_ERROR: 'SESSION_ERROR',
+  NETWORK_ERROR: 'NETWORK_ERROR',
+  RATE_LIMIT_ERROR: 'RATE_LIMIT_ERROR'
+}
 
 // Clerk 客户端初始化
 let clerkClient = null
@@ -52,51 +89,157 @@ function ensureClerkClient() {
   return clerkClient
 }
 
-// 验证 Clerk JWT Token
-async function verifyClerkToken(token) {
+// 验证 Clerk JWT Token (优化版)
+async function verifyClerkToken(token, useCache = true) {
+  const startTime = Date.now()
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex').substring(0, 16)
+
   try {
+    metrics.tokenVerifications++
+
+    // 尝试从缓存获取验证结果
+    if (useCache) {
+      const cacheKey = `clerk_token_verification:${tokenHash}`
+      const redisClient = redis.getClient()
+      const cachedResult = await redisClient.get(cacheKey)
+
+      if (cachedResult) {
+        const result = JSON.parse(cachedResult)
+        logger.debug(`Clerk: Token验证缓存命中 ${tokenHash}`)
+        return result
+      }
+    }
+
     const client = ensureClerkClient()
 
     // 使用 Clerk SDK 验证 JWT
     const payload = await client.verifyToken(token)
 
-    return {
+    const result = {
       valid: true,
       userId: payload.sub,
       sessionId: payload.sid,
+      issuer: payload.iss,
+      audience: payload.aud,
+      expiresAt: payload.exp,
+      issuedAt: payload.iat,
       payload
     }
+
+    // 缓存验证结果（仅缓存有效的token）
+    if (useCache && result.valid) {
+      const cacheKey = `clerk_token_verification:${tokenHash}`
+      const ttl = Math.min(
+        CACHE_CONFIG.TOKEN_VERIFICATION_TTL,
+        (result.expiresAt * 1000 - Date.now()) / 1000
+      )
+
+      if (ttl > 0) {
+        const redisClient = redis.getClient()
+        await redisClient.setex(cacheKey, Math.floor(ttl), JSON.stringify(result))
+      }
+    }
+
+    const duration = Date.now() - startTime
+    logger.debug(`Clerk: Token验证成功 ${tokenHash} (${duration}ms)`)
+
+    return result
   } catch (error) {
-    logger.warn('Clerk: Token 验证失败:', error.message)
+    metrics.errors++
+    const duration = Date.now() - startTime
+
+    const errorType = classifyError(error)
+    logger.warn(`Clerk: Token验证失败 ${tokenHash} (${duration}ms):`, {
+      type: errorType,
+      message: error.message,
+      code: error.code
+    })
 
     return {
       valid: false,
-      error: error.message
+      error: error.message,
+      errorType,
+      tokenHash
     }
   }
 }
 
-// 从 Clerk 获取用户信息
-async function getClerkUser(clerkUserId) {
-  try {
-    const client = ensureClerkClient()
+// 从 Clerk 获取用户信息 (优化版，支持缓存)
+async function getClerkUser(clerkUserId, useCache = true) {
+  const startTime = Date.now()
 
+  try {
+    // 尝试从缓存获取用户信息
+    if (useCache) {
+      const cacheKey = `clerk_user_info:${clerkUserId}`
+      const redisClient = redis.getClient()
+      const cachedUser = await redisClient.get(cacheKey)
+
+      if (cachedUser) {
+        metrics.userCacheHits++
+        const user = JSON.parse(cachedUser)
+        logger.debug(`Clerk: 用户信息缓存命中 ${clerkUserId}`)
+        return user
+      }
+      metrics.userCacheMisses++
+    }
+
+    const client = ensureClerkClient()
     const user = await client.users.getUser(clerkUserId)
 
-    return {
+    const userInfo = {
       id: user.id,
       email: user.emailAddresses?.[0]?.emailAddress,
       firstName: user.firstName,
       lastName: user.lastName,
+      fullName: user.fullName,
       imageUrl: user.imageUrl,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
       lastSignInAt: user.lastSignInAt,
-      externalAccounts: user.externalAccounts
+      externalAccounts:
+        user.externalAccounts?.map((account) => ({
+          provider: account.provider,
+          externalId: account.externalId,
+          emailAddress: account.emailAddress,
+          username: account.username
+        })) || [],
+      // 添加安全标识
+      hasPassword: !!user.passwordEnabled,
+      twoFactorEnabled: !!user.twoFactorEnabled,
+      emailVerified: user.emailAddresses?.[0]?.verification?.status === 'verified'
     }
+
+    // 缓存用户信息
+    if (useCache) {
+      const cacheKey = `clerk_user_info:${clerkUserId}`
+      const redisClient = redis.getClient()
+      await redisClient.setex(cacheKey, CACHE_CONFIG.USER_INFO_TTL, JSON.stringify(userInfo))
+    }
+
+    const duration = Date.now() - startTime
+    logger.debug(`Clerk: 获取用户信息成功 ${clerkUserId} (${duration}ms)`)
+
+    return userInfo
   } catch (error) {
-    logger.error('Clerk: 获取用户信息失败:', error)
-    throw new Error('无法获取 Clerk 用户信息')
+    metrics.errors++
+    const duration = Date.now() - startTime
+    const errorType = classifyError(error)
+
+    logger.error(`Clerk: 获取用户信息失败 ${clerkUserId} (${duration}ms):`, {
+      type: errorType,
+      message: error.message,
+      code: error.code
+    })
+
+    // 根据错误类型决定是否抛出异常
+    if (errorType === ErrorTypes.RATE_LIMIT_ERROR) {
+      throw new Error('Clerk API 请求频率过高，请稍后重试')
+    } else if (errorType === ErrorTypes.NETWORK_ERROR) {
+      throw new Error('网络连接异常，无法获取用户信息')
+    } else {
+      throw new Error('无法获取 Clerk 用户信息')
+    }
   }
 }
 
@@ -466,6 +609,7 @@ module.exports = {
   // 初始化和状态
   initializeService,
   getServiceStatus,
+  healthCheck,
 
   // Token 验证
   verifyClerkToken,
@@ -480,9 +624,265 @@ module.exports = {
   validateUserSession,
   revokeUserSession,
 
+  // 性能和监控
+  getMetrics,
+  resetMetrics,
+  cleanupExpiredCache,
+  warmupCache,
+
+  // 工具函数
+  withRetry,
+  classifyError,
+
   // 内部工具函数（供测试使用）
   generateSessionToken,
   storeUserSession
+}
+
+// ========== 新增工具函数 ==========
+
+// 错误分类器
+function classifyError(error) {
+  const message = error.message?.toLowerCase() || ''
+  const code = error.code?.toLowerCase() || ''
+
+  if (message.includes('rate limit') || code.includes('rate_limit')) {
+    return ErrorTypes.RATE_LIMIT_ERROR
+  } else if (
+    message.includes('network') ||
+    message.includes('timeout') ||
+    code.includes('network') ||
+    code.includes('timeout')
+  ) {
+    return ErrorTypes.NETWORK_ERROR
+  } else if (
+    message.includes('token') ||
+    message.includes('jwt') ||
+    code.includes('token') ||
+    code.includes('unauthorized')
+  ) {
+    return ErrorTypes.TOKEN_VALIDATION_ERROR
+  } else if (message.includes('configuration') || message.includes('key')) {
+    return ErrorTypes.CONFIGURATION_ERROR
+  } else if (message.includes('user') && message.includes('create')) {
+    return ErrorTypes.USER_CREATION_ERROR
+  } else if (message.includes('session')) {
+    return ErrorTypes.SESSION_ERROR
+  } else {
+    return ErrorTypes.CLERK_API_ERROR
+  }
+}
+
+// 重试机制包装器
+async function withRetry(operation, maxRetries = 3, delay = 1000) {
+  let lastError = null
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation()
+    } catch (error) {
+      lastError = error
+      const errorType = classifyError(error)
+
+      // 某些错误类型不值得重试
+      if (
+        errorType === ErrorTypes.CONFIGURATION_ERROR ||
+        errorType === ErrorTypes.TOKEN_VALIDATION_ERROR ||
+        errorType === ErrorTypes.USER_CREATION_ERROR
+      ) {
+        throw error
+      }
+
+      if (attempt < maxRetries) {
+        const backoffDelay = delay * Math.pow(2, attempt - 1)
+        logger.warn(
+          `Clerk: 操作失败，${backoffDelay}ms后重试 (${attempt}/${maxRetries}):`,
+          error.message
+        )
+        await new Promise((resolve) => setTimeout(resolve, backoffDelay))
+      }
+    }
+  }
+
+  throw lastError
+}
+
+// 批量清理过期缓存
+async function cleanupExpiredCache() {
+  try {
+    const redisClient = redis.getClient()
+    const patterns = ['clerk_user_info:*', 'clerk_token_verification:*', 'user_session:*']
+
+    let totalCleaned = 0
+
+    for (const pattern of patterns) {
+      const keys = await redisClient.keys(pattern)
+      if (keys.length > 0) {
+        // 批量检查TTL，删除已过期的key
+        const pipeline = redisClient.pipeline()
+        for (const key of keys) {
+          pipeline.ttl(key)
+        }
+        const ttls = await pipeline.exec()
+
+        const expiredKeys = keys.filter((key, index) => ttls[index][1] === -1)
+        if (expiredKeys.length > 0) {
+          await redisClient.del(...expiredKeys)
+          totalCleaned += expiredKeys.length
+        }
+      }
+    }
+
+    if (totalCleaned > 0) {
+      logger.info(`Clerk: 清理了 ${totalCleaned} 个过期缓存`)
+    }
+
+    return totalCleaned
+  } catch (error) {
+    logger.error('Clerk: 缓存清理失败:', error)
+    return 0
+  }
+}
+
+// 获取性能指标
+function getMetrics() {
+  const uptime = Date.now() - metrics.lastReset
+  const cacheHitRate =
+    metrics.userCacheHits + metrics.userCacheMisses > 0
+      ? ((metrics.userCacheHits / (metrics.userCacheHits + metrics.userCacheMisses)) * 100).toFixed(
+          2
+        )
+      : '0.00'
+
+  return {
+    ...metrics,
+    cacheHitRate: `${cacheHitRate}%`,
+    uptimeHours: (uptime / (1000 * 60 * 60)).toFixed(2),
+    errorRate:
+      metrics.tokenVerifications > 0
+        ? `${((metrics.errors / metrics.tokenVerifications) * 100).toFixed(2)}%`
+        : '0.00%'
+  }
+}
+
+// 重置性能指标
+function resetMetrics() {
+  Object.keys(metrics).forEach((key) => {
+    if (key !== 'lastReset') {
+      metrics[key] = 0
+    }
+  })
+  metrics.lastReset = Date.now()
+  logger.info('Clerk: 性能指标已重置')
+}
+
+// 缓存预热
+async function warmupCache(clerkUserIds) {
+  if (!Array.isArray(clerkUserIds) || clerkUserIds.length === 0) {
+    return { success: 0, errors: 0 }
+  }
+
+  logger.info(`Clerk: 开始缓存预热，目标用户数: ${clerkUserIds.length}`)
+
+  let success = 0
+  let errors = 0
+
+  const batchSize = 10 // 批量处理，避免过载
+  for (let i = 0; i < clerkUserIds.length; i += batchSize) {
+    const batch = clerkUserIds.slice(i, i + batchSize)
+
+    await Promise.all(
+      batch.map(async (userId) => {
+        try {
+          await getClerkUser(userId, true) // 强制缓存
+          success++
+        } catch (error) {
+          logger.warn(`Clerk: 预热缓存失败 ${userId}:`, error.message)
+          errors++
+        }
+      })
+    )
+
+    // 批次间短暂延迟，避免API限流
+    if (i + batchSize < clerkUserIds.length) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+  }
+
+  logger.info(`Clerk: 缓存预热完成，成功: ${success}, 失败: ${errors}`)
+  return { success, errors }
+}
+
+// 健康检查
+async function healthCheck() {
+  const startTime = Date.now()
+  const status = {
+    healthy: false,
+    timestamp: new Date().toISOString(),
+    checks: {}
+  }
+
+  try {
+    // 检查 Clerk 客户端
+    status.checks.clerkClient = !!clerkClient
+
+    // 检查配置
+    status.checks.configuration = !!(CLERK_SECRET_KEY && CLERK_PUBLISHABLE_KEY)
+
+    // 检查 Redis 连接
+    const redisClient = redis.getClient()
+    await redisClient.ping()
+    status.checks.redis = true
+
+    // 检查 Clerk API 连通性（如果配置正确）
+    if (status.checks.configuration && status.checks.clerkClient) {
+      try {
+        const client = ensureClerkClient()
+        // 尝试获取一个不存在的用户，检查API是否响应
+        await client.users.getUser('health_check_dummy_id')
+      } catch (error) {
+        // 预期会失败，只要不是网络错误就OK
+        status.checks.clerkApi =
+          !error.message.includes('network') && !error.message.includes('timeout')
+      }
+    } else {
+      status.checks.clerkApi = false
+    }
+
+    status.healthy = Object.values(status.checks).every((check) => check === true)
+    status.responseTime = Date.now() - startTime
+
+    return status
+  } catch (error) {
+    status.checks.error = error.message
+    status.responseTime = Date.now() - startTime
+    return status
+  }
+}
+
+// ========== 定时任务 ==========
+
+// 启动后台清理任务
+function startBackgroundTasks() {
+  // 缓存清理任务
+  setInterval(async () => {
+    try {
+      await cleanupExpiredCache()
+    } catch (error) {
+      logger.error('Clerk: 后台缓存清理任务失败:', error)
+    }
+  }, CACHE_CONFIG.SESSION_CLEANUP_INTERVAL * 1000)
+
+  // 指标重置任务
+  setInterval(() => {
+    try {
+      resetMetrics()
+    } catch (error) {
+      logger.error('Clerk: 后台指标重置任务失败:', error)
+    }
+  }, CACHE_CONFIG.METRICS_RESET_INTERVAL * 1000)
+
+  logger.info('Clerk: 后台任务已启动')
 }
 
 // 服务启动时自动初始化
@@ -490,5 +890,6 @@ if (require.main !== module) {
   // 延迟初始化，确保其他服务已加载
   setTimeout(() => {
     initializeService()
+    startBackgroundTasks()
   }, 1000)
 }

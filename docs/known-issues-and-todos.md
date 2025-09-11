@@ -27,7 +27,7 @@
 **描述**: Clerk 配置可能需要调整以适配生产环境  
 **影响**: 生产部署时可能出现配置错误  
 **任务**:
-- [ ] 验证 `VITE_CLERK_PUBLISHABLE_KEY` 在所有环境正确
+- [ ] 验证 `CLERK_PUBLISHABLE_KEY` 在所有环境正确
 - [ ] 确认 OAuth 重定向 URL 配置
 - [ ] 检查 CORS 设置对 Clerk 的兼容性
 - [ ] 验证 Docker 环境变量传递

@@ -9,7 +9,7 @@
 - **配置文件**: 创建了完整的 Clerk 配置系统
   - `web/admin-spa/src/config/clerk.js` - Clerk 配置和验证
   - `web/admin-spa/src/stores/clerk.js` - Clerk 状态管理
-- **环境变量**: 配置了 `VITE_CLERK_PUBLISHABLE_KEY`
+- **环境变量**: 配置了 `CLERK_PUBLISHABLE_KEY`
 - **OAuth 流程**: 实现了完整的 PKCE OAuth 2.0 流程
 - **多提供商支持**: 支持 Google 和 GitHub OAuth（当前只启用 Google）
 
