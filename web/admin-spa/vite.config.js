@@ -103,10 +103,11 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'dist',
       assetsDir: 'assets',
+      chunkSizeWarningLimit: 1000,
       rollupOptions: {
         output: {
           manualChunks(id) {
-            // 将 vue 相关的库打包到一起
+            // 将不同的库分包到不同的chunk
             if (id.includes('node_modules')) {
               if (id.includes('element-plus')) {
                 return 'element-plus'
@@ -117,7 +118,55 @@ export default defineConfig(({ mode }) => {
               if (id.includes('vue') || id.includes('pinia') || id.includes('vue-router')) {
                 return 'vue-vendor'
               }
+              if (id.includes('@clerk')) {
+                return 'clerk'
+              }
+              if (id.includes('axios')) {
+                return 'http'
+              }
+              if (id.includes('dayjs')) {
+                return 'utils'
+              }
+              if (id.includes('xlsx')) {
+                return 'excel'
+              }
+              if (id.includes('@fortawesome')) {
+                return 'icons'
+              }
               return 'vendor'
+            }
+
+            // 按功能模块分包应用代码
+            if (id.includes('/src/views/')) {
+              if (id.includes('Dashboard')) {
+                return 'dashboard'
+              }
+              if (id.includes('ApiKeys') || id.includes('ApiStats')) {
+                return 'api-management'
+              }
+              if (id.includes('Accounts')) {
+                return 'accounts'
+              }
+              if (id.includes('Settings')) {
+                return 'settings'
+              }
+              if (id.includes('User')) {
+                return 'user'
+              }
+              return 'views'
+            }
+
+            if (id.includes('/src/components/')) {
+              if (id.includes('accounts/')) {
+                return 'components-accounts'
+              }
+              if (id.includes('apikeys/')) {
+                return 'components-apikeys'
+              }
+              if (id.includes('admin/')) {
+                return 'components-admin'
+              }
+              return 'components'
             }
           }
         }
