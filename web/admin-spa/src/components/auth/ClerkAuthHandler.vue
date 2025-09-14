@@ -53,13 +53,13 @@
               <i class="fas fa-check-circle text-green-500"></i>
             </div>
             <p class="success-text">{{ statusMessage }}</p>
-            <div class="success-details" v-if="userInfo">
+            <div v-if="userInfo" class="success-details">
               <div class="user-avatar">
                 <img
                   v-if="userInfo.avatar"
-                  :src="userInfo.avatar"
                   :alt="userInfo.fullName"
                   class="avatar-image"
+                  :src="userInfo.avatar"
                 />
                 <div v-else class="avatar-placeholder">
                   <i class="fas fa-user"></i>
@@ -85,17 +85,11 @@
               </details>
             </div>
             <div class="error-actions">
-              <button
-                @click="handleRetry"
-                class="retry-button"
-                :disabled="retrying"
-              >
+              <button class="retry-button" :disabled="retrying" @click="handleRetry">
                 <i class="fas fa-redo mr-2" :class="{ 'animate-spin': retrying }"></i>
                 {{ retrying ? '重试中...' : '重试' }}
               </button>
-              <button @click="handleClose" class="close-button">
-                取消
-              </button>
+              <button class="close-button" @click="handleClose">取消</button>
             </div>
           </div>
         </div>
@@ -103,9 +97,9 @@
         <!-- 关闭按钮 -->
         <button
           v-if="status === 'success' || status === 'error'"
-          @click="handleClose"
           class="auth-close-button"
           :title="status === 'success' ? '继续' : '关闭'"
+          @click="handleClose"
         >
           <i class="fas fa-times"></i>
         </button>
@@ -114,7 +108,7 @@
 
     <!-- 网络状态指示器 -->
     <div v-if="showNetworkStatus && !isOnline" class="network-status">
-      <i class="fas fa-wifi text-red-500 mr-2"></i>
+      <i class="fas fa-wifi mr-2 text-red-500"></i>
       <span class="text-sm text-red-600 dark:text-red-400">网络连接已断开</span>
     </div>
   </div>
@@ -124,7 +118,6 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useClerkStore } from '@/stores/clerk'
-import { useUserStore } from '@/stores/user'
 import { showToast } from '@/utils/toast'
 
 // Props
@@ -175,7 +168,7 @@ const router = useRouter()
 
 // Stores
 const clerkStore = useClerkStore()
-const userStore = useUserStore()
+// const userStore = useUserStore() // 未使用，注释掉
 
 // 状态
 const isVisible = ref(props.visible)
@@ -204,76 +197,103 @@ const statusTitle = computed(() => {
 })
 
 // 监听 props 变化
-watch(() => props.visible, (newVal) => {
-  isVisible.value = newVal
-  if (newVal) {
-    clearAutoCloseTimer()
+watch(
+  () => props.visible,
+  (newVal) => {
+    isVisible.value = newVal
+    if (newVal) {
+      clearAutoCloseTimer()
+    }
   }
-})
+)
 
-watch(() => props.authStatus, (newVal) => {
-  status.value = newVal
-  
-  // 成功状态自动关闭
-  if (newVal === 'success' && props.autoCloseDelay > 0) {
-    startAutoCloseTimer()
+watch(
+  () => props.authStatus,
+  (newVal) => {
+    status.value = newVal
+
+    // 成功状态自动关闭
+    if (newVal === 'success' && props.autoCloseDelay > 0) {
+      startAutoCloseTimer()
+    }
   }
-})
+)
 
-watch(() => props.message, (newVal) => {
-  statusMessage.value = newVal
-})
-
-watch(() => props.error, (newVal) => {
-  if (newVal) {
-    errorDetails.value = typeof newVal === 'string' ? newVal : JSON.stringify(newVal, null, 2)
-  } else {
-    errorDetails.value = null
+watch(
+  () => props.message,
+  (newVal) => {
+    statusMessage.value = newVal
   }
-})
+)
 
-watch(() => props.user, (newVal) => {
-  userInfo.value = newVal
-})
+watch(
+  () => props.error,
+  (newVal) => {
+    if (newVal) {
+      errorDetails.value = typeof newVal === 'string' ? newVal : JSON.stringify(newVal, null, 2)
+    } else {
+      errorDetails.value = null
+    }
+  }
+)
+
+watch(
+  () => props.user,
+  (newVal) => {
+    userInfo.value = newVal
+  }
+)
 
 // 监听 Clerk Store 状态变化
-watch(() => clerkStore.isLoading, (loading) => {
-  if (loading && status.value === 'idle') {
-    status.value = 'loading'
-    statusMessage.value = '正在初始化 Clerk 服务...'
+watch(
+  () => clerkStore.isLoading,
+  (loading) => {
+    if (loading && status.value === 'idle') {
+      status.value = 'loading'
+      statusMessage.value = '正在初始化 Clerk 服务...'
+    }
   }
-})
+)
 
-watch(() => clerkStore.isSyncing, (syncing) => {
-  if (syncing) {
-    status.value = 'syncing'
-    statusMessage.value = '正在同步用户数据到服务器...'
+watch(
+  () => clerkStore.isSyncing,
+  (syncing) => {
+    if (syncing) {
+      status.value = 'syncing'
+      statusMessage.value = '正在同步用户数据到服务器...'
+    }
   }
-})
+)
 
-watch(() => clerkStore.error, (error) => {
-  if (error) {
-    status.value = 'error'
-    statusMessage.value = error
-    errorDetails.value = error
-    emit('error', error)
+watch(
+  () => clerkStore.error,
+  (error) => {
+    if (error) {
+      status.value = 'error'
+      statusMessage.value = error
+      errorDetails.value = error
+      emit('error', error)
+    }
   }
-})
+)
 
-watch(() => clerkStore.currentUser, (user) => {
-  if (user && status.value === 'syncing') {
-    status.value = 'success'
-    statusMessage.value = '登录成功，即将跳转...'
-    userInfo.value = user
-    emit('success', user)
+watch(
+  () => clerkStore.currentUser,
+  (user) => {
+    if (user && status.value === 'syncing') {
+      status.value = 'success'
+      statusMessage.value = '登录成功，即将跳转...'
+      userInfo.value = user
+      emit('success', user)
+    }
   }
-})
+)
 
 // 方法
 const handleClose = () => {
   clearAutoCloseTimer()
   isVisible.value = false
-  
+
   // 重置状态
   setTimeout(() => {
     status.value = 'idle'
@@ -282,9 +302,9 @@ const handleClose = () => {
     userInfo.value = null
     retrying.value = false
   }, 300)
-  
+
   emit('close')
-  
+
   // 如果登录成功，跳转到仪表板
   if (status.value === 'success') {
     const redirectUrl = sessionStorage.getItem('redirectAfterLogin') || '/user-dashboard'
@@ -295,17 +315,17 @@ const handleClose = () => {
 
 const handleRetry = async () => {
   if (retrying.value) return
-  
+
   try {
     retrying.value = true
     status.value = 'loading'
     statusMessage.value = '正在重试登录...'
     errorDetails.value = null
-    
+
     // 重新初始化 Clerk 并打开登录
     await clerkStore.initialize()
     await clerkStore.openSignIn()
-    
+
     emit('retry')
   } catch (error) {
     console.error('重试登录失败:', error)
@@ -370,8 +390,12 @@ onUnmounted(() => {
 
 // 暴露方法给父组件
 defineExpose({
-  show: () => { isVisible.value = true },
-  hide: () => { handleClose() },
+  show: () => {
+    isVisible.value = true
+  },
+  hide: () => {
+    handleClose()
+  },
   setStatus: (newStatus, message = '') => {
     status.value = newStatus
     statusMessage.value = message
@@ -402,7 +426,7 @@ defineExpose({
   @apply bg-white dark:bg-gray-800;
   @apply rounded-2xl shadow-2xl;
   @apply border border-gray-200 dark:border-gray-600;
-  @apply max-w-md w-full mx-auto;
+  @apply mx-auto w-full max-w-md;
   @apply overflow-hidden;
   animation: slideUp 0.3s ease-out;
 }
@@ -416,11 +440,11 @@ defineExpose({
 }
 
 .auth-logo {
-  @apply flex items-center justify-center mb-3;
+  @apply mb-3 flex items-center justify-center;
 }
 
 .auth-title {
-  @apply text-lg font-semibold text-center;
+  @apply text-center text-lg font-semibold;
   @apply text-gray-900 dark:text-white;
 }
 
@@ -435,12 +459,12 @@ defineExpose({
 }
 
 .loading-spinner {
-  @apply flex justify-center items-center mb-4;
+  @apply mb-4 flex items-center justify-center;
   @apply space-x-1;
 }
 
 .spinner-ring {
-  @apply w-3 h-3 rounded-full;
+  @apply h-3 w-3 rounded-full;
   @apply bg-blue-500;
   animation: bounce 1.4s ease-in-out infinite both;
 }
@@ -464,16 +488,16 @@ defineExpose({
 }
 
 .sync-icon {
-  @apply text-2xl mb-4;
+  @apply mb-4 text-2xl;
 }
 
 .sync-text {
-  @apply text-gray-600 dark:text-gray-300 mb-4;
+  @apply mb-4 text-gray-600 dark:text-gray-300;
 }
 
 .sync-progress {
   @apply w-full bg-gray-200 dark:bg-gray-700;
-  @apply rounded-full h-2;
+  @apply h-2 rounded-full;
   @apply overflow-hidden;
 }
 
@@ -490,31 +514,31 @@ defineExpose({
 }
 
 .success-icon {
-  @apply text-4xl mb-4;
+  @apply mb-4 text-4xl;
 }
 
 .success-text {
-  @apply text-gray-600 dark:text-gray-300 mb-4;
+  @apply mb-4 text-gray-600 dark:text-gray-300;
 }
 
 .success-details {
   @apply flex items-center justify-center;
   @apply bg-gray-50 dark:bg-gray-700;
-  @apply rounded-lg p-4 mt-4;
+  @apply mt-4 rounded-lg p-4;
 }
 
 .user-avatar {
-  @apply flex-shrink-0 mr-3;
+  @apply mr-3 flex-shrink-0;
 }
 
 .avatar-image {
-  @apply w-12 h-12 rounded-full;
+  @apply h-12 w-12 rounded-full;
   @apply border-2 border-white dark:border-gray-600;
   @apply shadow-md;
 }
 
 .avatar-placeholder {
-  @apply w-12 h-12 rounded-full;
+  @apply h-12 w-12 rounded-full;
   @apply bg-gray-300 dark:bg-gray-600;
   @apply flex items-center justify-center;
   @apply text-gray-500 dark:text-gray-400;
@@ -539,11 +563,11 @@ defineExpose({
 }
 
 .error-icon {
-  @apply text-4xl mb-4;
+  @apply mb-4 text-4xl;
 }
 
 .error-text {
-  @apply text-red-600 dark:text-red-400 mb-4;
+  @apply mb-4 text-red-600 dark:text-red-400;
 }
 
 .error-details {
@@ -566,21 +590,21 @@ defineExpose({
   @apply mt-2 p-2;
   @apply bg-gray-100 dark:bg-gray-600;
   @apply rounded border;
-  @apply overflow-auto max-h-32;
+  @apply max-h-32 overflow-auto;
 }
 
 .error-actions {
-  @apply flex justify-center space-x-3 mt-6;
+  @apply mt-6 flex justify-center space-x-3;
 }
 
 .retry-button {
   @apply px-4 py-2;
   @apply bg-blue-600 hover:bg-blue-700;
-  @apply text-white font-medium;
+  @apply font-medium text-white;
   @apply rounded-lg;
   @apply transition-colors duration-200;
   @apply flex items-center;
-  @apply disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply disabled:cursor-not-allowed disabled:opacity-50;
 }
 
 .close-button {
@@ -588,14 +612,14 @@ defineExpose({
   @apply bg-gray-300 hover:bg-gray-400;
   @apply dark:bg-gray-600 dark:hover:bg-gray-500;
   @apply text-gray-700 dark:text-gray-200;
-  @apply font-medium rounded-lg;
+  @apply rounded-lg font-medium;
   @apply transition-colors duration-200;
 }
 
 /* 关闭按钮 */
 .auth-close-button {
-  @apply absolute top-4 right-4;
-  @apply w-8 h-8 rounded-full;
+  @apply absolute right-4 top-4;
+  @apply h-8 w-8 rounded-full;
   @apply bg-gray-100 hover:bg-gray-200;
   @apply dark:bg-gray-700 dark:hover:bg-gray-600;
   @apply text-gray-500 dark:text-gray-400;
@@ -636,7 +660,9 @@ defineExpose({
 }
 
 @keyframes bounce {
-  0%, 80%, 100% {
+  0%,
+  80%,
+  100% {
     transform: scale(0);
   }
   40% {
@@ -661,12 +687,12 @@ defineExpose({
   .auth-status-modal {
     @apply mx-4;
   }
-  
+
   .auth-header,
   .auth-content {
     @apply px-4;
   }
-  
+
   .error-actions {
     @apply flex-col space-x-0 space-y-2;
   }

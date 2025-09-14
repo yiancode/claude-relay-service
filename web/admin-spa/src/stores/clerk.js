@@ -6,7 +6,7 @@
  */
 
 import { defineStore } from 'pinia'
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { showToast } from '@/utils/toast'
 import { useUserStore } from './user'
 import axios from 'axios'
@@ -15,25 +15,25 @@ const API_BASE = '/webapi'
 
 export const useClerkStore = defineStore('clerk', () => {
   // ========== 核心状态 ==========
-  
+
   // 初始化状态
   const isInitialized = ref(false)
   const isLoading = ref(false)
   const error = ref(null)
-  
+
   // Clerk 客户端实例
   let clerkInstance = null
-  
+
   // 用户状态
   const clerkUser = ref(null)
   const isSignedIn = ref(false)
   const sessionToken = ref(null)
-  
+
   // 同步状态
   const isSyncing = ref(false)
   const syncError = ref(null)
   const lastSyncTime = ref(null)
-  
+
   // 配置状态
   const config = ref({
     publishableKey: import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
@@ -41,12 +41,12 @@ export const useClerkStore = defineStore('clerk', () => {
   })
 
   // ========== 计算属性 ==========
-  
+
   const isAuthenticated = computed(() => isSignedIn.value && !!clerkUser.value)
-  
+
   const currentUser = computed(() => {
     if (!clerkUser.value) return null
-    
+
     return {
       id: clerkUser.value.id,
       email: clerkUser.value.primaryEmailAddress?.emailAddress,
@@ -59,7 +59,7 @@ export const useClerkStore = defineStore('clerk', () => {
       lastSignInAt: clerkUser.value.lastSignInAt
     }
   })
-  
+
   const authProvider = computed(() => {
     if (!clerkUser.value?.externalAccounts?.length) return null
     return clerkUser.value.externalAccounts[0]?.provider || 'unknown'
@@ -84,9 +84,9 @@ export const useClerkStore = defineStore('clerk', () => {
 
       // 动态导入 Clerk SDK
       const { Clerk } = await import('@clerk/clerk-js')
-      
+
       clerkInstance = new Clerk(config.value.publishableKey)
-      
+
       // 加载 Clerk
       await clerkInstance.load({
         // 优化配置
@@ -96,9 +96,11 @@ export const useClerkStore = defineStore('clerk', () => {
             card: 'shadow-2xl rounded-xl border-0',
             headerTitle: 'text-xl font-semibold text-gray-900 dark:text-white',
             headerSubtitle: 'text-sm text-gray-600 dark:text-gray-400 mt-1',
-            socialButtonsBlockButton: 'h-11 font-medium transition-all duration-200 rounded-lg border border-gray-300 hover:border-gray-400 dark:border-gray-600 dark:hover:border-gray-500',
+            socialButtonsBlockButton:
+              'h-11 font-medium transition-all duration-200 rounded-lg border border-gray-300 hover:border-gray-400 dark:border-gray-600 dark:hover:border-gray-500',
             socialButtonsBlockButtonText: 'font-medium text-sm',
-            formButtonPrimary: 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500 transition-colors duration-200 rounded-lg',
+            formButtonPrimary:
+              'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500 transition-colors duration-200 rounded-lg',
             footer: 'hidden',
             footerAction: 'hidden'
           },
@@ -137,7 +139,6 @@ export const useClerkStore = defineStore('clerk', () => {
 
       console.log('Clerk: 初始化成功')
       return clerkInstance
-
     } catch (err) {
       console.error('Clerk: 初始化失败:', err)
       error.value = err.message
@@ -154,16 +155,19 @@ export const useClerkStore = defineStore('clerk', () => {
     // 监听用户状态变化
     clerkInstance.addListener(({ user, session }) => {
       console.log('Clerk: 状态变化', { user: !!user, session: !!session })
-      
+
       clerkUser.value = user
       isSignedIn.value = !!user && !!session
-      
+
       if (session) {
-        session.getToken().then(token => {
-          sessionToken.value = token
-        }).catch(err => {
-          console.error('Clerk: 获取 token 失败:', err)
-        })
+        session
+          .getToken()
+          .then((token) => {
+            sessionToken.value = token
+          })
+          .catch((err) => {
+            console.error('Clerk: 获取 token 失败:', err)
+          })
       } else {
         sessionToken.value = null
       }
@@ -201,7 +205,6 @@ export const useClerkStore = defineStore('clerk', () => {
         redirectUrl: window.location.origin + '/user-dashboard',
         ...options
       })
-
     } catch (err) {
       console.error('Clerk: 打开登录失败:', err)
       error.value = err.message
@@ -259,24 +262,23 @@ export const useClerkStore = defineStore('clerk', () => {
         // 更新本地用户状态
         const userStore = useUserStore()
         await userStore.setClerkUserData(response.data.user, response.data.sessionToken)
-        
+
         lastSyncTime.value = new Date()
-        
+
         console.log('Clerk: 用户同步成功')
         showToast('登录成功！', 'success')
-        
+
         return response.data
       } else {
         throw new Error(response.data.message || '同步失败')
       }
-
     } catch (err) {
       console.error('Clerk: 用户同步失败:', err)
       syncError.value = err.message
-      
+
       // 同步失败时显示错误，但不自动登出
       showToast(err.response?.data?.message || err.message || '登录失败，请重试', 'error')
-      
+
       throw err
     } finally {
       isSyncing.value = false
@@ -310,7 +312,6 @@ export const useClerkStore = defineStore('clerk', () => {
       if (redirectUrl) {
         window.location.href = redirectUrl
       }
-
     } catch (err) {
       console.error('Clerk: 登出失败:', err)
       showToast('登出失败，请重试', 'error')
@@ -330,7 +331,7 @@ export const useClerkStore = defineStore('clerk', () => {
       // 重新加载用户数据
       await clerkInstance.user.reload()
       clerkUser.value = clerkInstance.user
-      
+
       // 重新同步到后端
       return await syncUserToBackend(true)
     } catch (err) {
@@ -355,7 +356,7 @@ export const useClerkStore = defineStore('clerk', () => {
   // 检查网络状态
   const checkNetworkStatus = async () => {
     try {
-      const response = await fetch('https://api.clerk.dev/health', {
+      await fetch('https://api.clerk.dev/health', {
         method: 'HEAD',
         mode: 'no-cors'
       })
@@ -372,9 +373,9 @@ export const useClerkStore = defineStore('clerk', () => {
         return await operation()
       } catch (err) {
         if (i === maxRetries - 1) throw err
-        
+
         console.warn(`Clerk: 操作失败，${delay}ms 后重试 (${i + 1}/${maxRetries})`)
-        await new Promise(resolve => setTimeout(resolve, delay))
+        await new Promise((resolve) => setTimeout(resolve, delay))
         delay *= 2 // 指数退避
       }
     }

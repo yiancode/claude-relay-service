@@ -11,6 +11,7 @@
     "format": "prettier --write src/"
   },
   "dependencies": {
+    "@clerk/clerk-js": "^5.93.0",
     "@clerk/vue": "^1.12.0",
     "@fortawesome/fontawesome-free": "^6.5.1",
     "axios": "^1.6.2",
