@@ -1200,6 +1200,13 @@ class ClaudeAccountService {
         accountData.schedulable = 'true'
         delete accountData.rateLimitAutoStopped
         logger.info(`✅ Auto-resuming scheduling for account ${accountId} after rate limit cleared`)
+        logger.info(
+          `📊 Account ${accountId} state after recovery: schedulable=${accountData.schedulable}`
+        )
+      } else {
+        logger.info(
+          `ℹ️ Account ${accountId} did not need auto-resume: autoStopped=${accountData.rateLimitAutoStopped}, schedulable=${accountData.schedulable}`
+        )
       }
       await redis.setClaudeAccount(accountId, accountData)
 
@@ -1220,10 +1227,13 @@ class ClaudeAccountService {
         return false
       }
 
-      // 检查是否有限流状态
-      if (accountData.rateLimitStatus === 'limited' && accountData.rateLimitedAt) {
-        const now = new Date()
+      const now = new Date()
 
+      // 检查是否有限流状态（包括字段缺失但有自动停止标记的情况）
+      if (
+        (accountData.rateLimitStatus === 'limited' && accountData.rateLimitedAt) ||
+        (accountData.rateLimitAutoStopped === 'true' && accountData.rateLimitEndAt)
+      ) {
         // 优先使用 rateLimitEndAt（基于会话窗口）
         if (accountData.rateLimitEndAt) {
           const rateLimitEndAt = new Date(accountData.rateLimitEndAt)
@@ -1235,7 +1245,7 @@ class ClaudeAccountService {
           }
 
           return true
-        } else {
+        } else if (accountData.rateLimitedAt) {
           // 兼容旧数据：使用1小时限流
           const rateLimitedAt = new Date(accountData.rateLimitedAt)
           const hoursSinceRateLimit = (now - rateLimitedAt) / (1000 * 60 * 60)
@@ -2290,6 +2300,178 @@ class ClaudeAccountService {
     } catch (error) {
       logger.error(`❌ Failed to remove overload status for account: ${accountId}`, error)
       // 不抛出错误，移除过载状态失败不应该影响主流程
+    }
+  }
+
+  /**
+   * 检查并恢复因5小时限制被自动停止的账号
+   * 用于定时任务自动恢复
+   * @returns {Promise<{checked: number, recovered: number, accounts: Array}>}
+   */
+  async checkAndRecoverFiveHourStoppedAccounts() {
+    const result = {
+      checked: 0,
+      recovered: 0,
+      accounts: []
+    }
+
+    try {
+      const accounts = await this.getAllAccounts()
+      const now = new Date()
+
+      for (const account of accounts) {
+        // 只检查因5小时限制被自动停止的账号
+        // 重要：不恢复手动停止的账号（没有fiveHourAutoStopped标记的）
+        if (account.fiveHourAutoStopped === 'true' && account.schedulable === 'false') {
+          result.checked++
+
+          // 使用分布式锁防止并发修改
+          const lockKey = `lock:account:${account.id}:recovery`
+          const lockValue = `${Date.now()}_${Math.random()}`
+          const lockTTL = 5000 // 5秒锁超时
+
+          try {
+            // 尝试获取锁
+            const lockAcquired = await redis.setAccountLock(lockKey, lockValue, lockTTL)
+            if (!lockAcquired) {
+              logger.debug(
+                `⏭️ Account ${account.name} (${account.id}) is being processed by another instance`
+              )
+              continue
+            }
+
+            // 重新获取账号数据，确保是最新的
+            const latestAccount = await redis.getClaudeAccount(account.id)
+            if (
+              !latestAccount ||
+              latestAccount.fiveHourAutoStopped !== 'true' ||
+              latestAccount.schedulable !== 'false'
+            ) {
+              // 账号状态已变化，跳过
+              await redis.releaseAccountLock(lockKey, lockValue)
+              continue
+            }
+
+            // 检查当前时间是否已经进入新的5小时窗口
+            let shouldRecover = false
+            let newWindowStart = null
+            let newWindowEnd = null
+
+            if (latestAccount.sessionWindowEnd) {
+              const windowEnd = new Date(latestAccount.sessionWindowEnd)
+
+              // 使用严格的时间比较，添加1分钟缓冲避免边界问题
+              if (now.getTime() > windowEnd.getTime() + 60000) {
+                shouldRecover = true
+
+                // 计算新的窗口时间（基于窗口结束时间，而不是当前时间）
+                // 这样可以保证窗口时间的连续性
+                newWindowStart = new Date(windowEnd)
+                newWindowStart.setMilliseconds(newWindowStart.getMilliseconds() + 1)
+                newWindowEnd = new Date(newWindowStart)
+                newWindowEnd.setHours(newWindowEnd.getHours() + 5)
+
+                logger.info(
+                  `🔄 Account ${latestAccount.name} (${latestAccount.id}) has entered new session window. ` +
+                    `Old window: ${latestAccount.sessionWindowStart} - ${latestAccount.sessionWindowEnd}, ` +
+                    `New window: ${newWindowStart.toISOString()} - ${newWindowEnd.toISOString()}`
+                )
+              }
+            } else {
+              // 如果没有窗口结束时间，但有停止时间，检查是否已经过了5小时
+              if (latestAccount.fiveHourStoppedAt) {
+                const stoppedAt = new Date(latestAccount.fiveHourStoppedAt)
+                const hoursSinceStopped = (now.getTime() - stoppedAt.getTime()) / (1000 * 60 * 60)
+
+                // 使用严格的5小时判断，加上1分钟缓冲
+                if (hoursSinceStopped > 5.017) {
+                  // 5小时1分钟
+                  shouldRecover = true
+                  newWindowStart = this._calculateSessionWindowStart(now)
+                  newWindowEnd = this._calculateSessionWindowEnd(newWindowStart)
+
+                  logger.info(
+                    `🔄 Account ${latestAccount.name} (${latestAccount.id}) stopped ${hoursSinceStopped.toFixed(2)} hours ago, recovering`
+                  )
+                }
+              }
+            }
+
+            if (shouldRecover) {
+              // 恢复账号调度
+              const updatedAccountData = { ...latestAccount }
+
+              // 恢复调度状态
+              updatedAccountData.schedulable = 'true'
+              delete updatedAccountData.fiveHourAutoStopped
+              delete updatedAccountData.fiveHourStoppedAt
+
+              // 更新会话窗口（如果有新窗口）
+              if (newWindowStart && newWindowEnd) {
+                updatedAccountData.sessionWindowStart = newWindowStart.toISOString()
+                updatedAccountData.sessionWindowEnd = newWindowEnd.toISOString()
+
+                // 清除会话窗口状态
+                delete updatedAccountData.sessionWindowStatus
+                delete updatedAccountData.sessionWindowStatusUpdatedAt
+              }
+
+              // 保存更新
+              await redis.setClaudeAccount(account.id, updatedAccountData)
+
+              result.recovered++
+              result.accounts.push({
+                id: latestAccount.id,
+                name: latestAccount.name,
+                oldWindow: latestAccount.sessionWindowEnd
+                  ? {
+                      start: latestAccount.sessionWindowStart,
+                      end: latestAccount.sessionWindowEnd
+                    }
+                  : null,
+                newWindow:
+                  newWindowStart && newWindowEnd
+                    ? {
+                        start: newWindowStart.toISOString(),
+                        end: newWindowEnd.toISOString()
+                      }
+                    : null
+              })
+
+              logger.info(
+                `✅ Auto-resumed scheduling for account ${latestAccount.name} (${latestAccount.id}) - 5-hour limit expired`
+              )
+            }
+
+            // 释放锁
+            await redis.releaseAccountLock(lockKey, lockValue)
+          } catch (error) {
+            // 确保释放锁
+            if (lockKey && lockValue) {
+              try {
+                await redis.releaseAccountLock(lockKey, lockValue)
+              } catch (unlockError) {
+                logger.error(`Failed to release lock for account ${account.id}:`, unlockError)
+              }
+            }
+            logger.error(
+              `❌ Failed to check/recover 5-hour stopped account ${account.name} (${account.id}):`,
+              error
+            )
+          }
+        }
+      }
+
+      if (result.recovered > 0) {
+        logger.info(
+          `🔄 5-hour limit recovery completed: ${result.recovered}/${result.checked} accounts recovered`
+        )
+      }
+
+      return result
+    } catch (error) {
+      logger.error('❌ Failed to check and recover 5-hour stopped accounts:', error)
+      throw error
     }
   }
 }
