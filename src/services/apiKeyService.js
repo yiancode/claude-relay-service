@@ -33,6 +33,7 @@ class ApiKeyService {
       enableClientRestriction = false,
       allowedClients = [],
       dailyCostLimit = 0,
+      totalCostLimit = 0,
       weeklyOpusCostLimit = 0,
       tags = [],
       activationDays = 0, // 新增：激活后有效天数（0表示不使用此功能）
@@ -68,6 +69,7 @@ class ApiKeyService {
       enableClientRestriction: String(enableClientRestriction || false),
       allowedClients: JSON.stringify(allowedClients || []),
       dailyCostLimit: String(dailyCostLimit || 0),
+      totalCostLimit: String(totalCostLimit || 0),
       weeklyOpusCostLimit: String(weeklyOpusCostLimit || 0),
       tags: JSON.stringify(tags || []),
       activationDays: String(activationDays || 0), // 新增：激活后有效天数
@@ -111,6 +113,7 @@ class ApiKeyService {
       enableClientRestriction: keyData.enableClientRestriction === 'true',
       allowedClients: JSON.parse(keyData.allowedClients || '[]'),
       dailyCostLimit: parseFloat(keyData.dailyCostLimit || 0),
+      totalCostLimit: parseFloat(keyData.totalCostLimit || 0),
       weeklyOpusCostLimit: parseFloat(keyData.weeklyOpusCostLimit || 0),
       tags: JSON.parse(keyData.tags || '[]'),
       activationDays: parseInt(keyData.activationDays || 0),
@@ -162,7 +165,9 @@ class ApiKeyService {
         await redis.setApiKey(keyData.id, keyData)
 
         logger.success(
-          `🔓 API key activated: ${keyData.id} (${keyData.name}), will expire in ${activationDays} days at ${expiresAt.toISOString()}`
+          `🔓 API key activated: ${keyData.id} (${
+            keyData.name
+          }), will expire in ${activationDays} days at ${expiresAt.toISOString()}`
         )
       }
 
@@ -188,8 +193,12 @@ class ApiKeyService {
       // 获取使用统计（供返回数据使用）
       const usage = await redis.getUsageStats(keyData.id)
 
-      // 获取当日费用统计
-      const dailyCost = await redis.getDailyCost(keyData.id)
+      // 获取费用统计
+      const [dailyCost, costStats] = await Promise.all([
+        redis.getDailyCost(keyData.id),
+        redis.getCostStats(keyData.id)
+      ])
+      const totalCost = costStats?.total || 0
 
       // 更新最后使用时间（优化：只在实际API调用时更新，而不是验证时）
       // 注意：lastUsedAt的更新已移至recordUsage方法中
@@ -245,8 +254,10 @@ class ApiKeyService {
           enableClientRestriction: keyData.enableClientRestriction === 'true',
           allowedClients,
           dailyCostLimit: parseFloat(keyData.dailyCostLimit || 0),
+          totalCostLimit: parseFloat(keyData.totalCostLimit || 0),
           weeklyOpusCostLimit: parseFloat(keyData.weeklyOpusCostLimit || 0),
           dailyCost: dailyCost || 0,
+          totalCost,
           weeklyOpusCost: (await redis.getWeeklyOpusCost(keyData.id)) || 0,
           tags,
           usage
@@ -306,7 +317,10 @@ class ApiKeyService {
       }
 
       // 获取当日费用
-      const dailyCost = (await redis.getDailyCost(keyData.id)) || 0
+      const [dailyCost, costStats] = await Promise.all([
+        redis.getDailyCost(keyData.id),
+        redis.getCostStats(keyData.id)
+      ])
 
       // 获取使用统计
       const usage = await redis.getUsageStats(keyData.id)
@@ -365,8 +379,10 @@ class ApiKeyService {
           enableClientRestriction: keyData.enableClientRestriction === 'true',
           allowedClients,
           dailyCostLimit: parseFloat(keyData.dailyCostLimit || 0),
+          totalCostLimit: parseFloat(keyData.totalCostLimit || 0),
           weeklyOpusCostLimit: parseFloat(keyData.weeklyOpusCostLimit || 0),
           dailyCost: dailyCost || 0,
+          totalCost: costStats?.total || 0,
           weeklyOpusCost: (await redis.getWeeklyOpusCost(keyData.id)) || 0,
           tags,
           usage
@@ -411,6 +427,7 @@ class ApiKeyService {
         key.enableClientRestriction = key.enableClientRestriction === 'true'
         key.permissions = key.permissions || 'all' // 兼容旧数据
         key.dailyCostLimit = parseFloat(key.dailyCostLimit || 0)
+        key.totalCostLimit = parseFloat(key.totalCostLimit || 0)
         key.weeklyOpusCostLimit = parseFloat(key.weeklyOpusCostLimit || 0)
         key.dailyCost = (await redis.getDailyCost(key.id)) || 0
         key.weeklyOpusCost = (await redis.getWeeklyOpusCost(key.id)) || 0
@@ -483,6 +500,10 @@ class ApiKeyService {
         } catch (e) {
           key.tags = []
         }
+        // 不暴露已弃用字段
+        if (Object.prototype.hasOwnProperty.call(key, 'ccrAccountId')) {
+          delete key.ccrAccountId
+        }
         delete key.apiKey // 不返回哈希后的key
       }
 
@@ -528,6 +549,7 @@ class ApiKeyService {
         'enableClientRestriction',
         'allowedClients',
         'dailyCostLimit',
+        'totalCostLimit',
         'weeklyOpusCostLimit',
         'tags',
         'userId', // 新增：用户ID（所有者变更）
@@ -823,6 +845,21 @@ class ApiKeyService {
         }
       }
 
+      // 记录单次请求的使用详情
+      const usageCost = costInfo && costInfo.costs ? costInfo.costs.total || 0 : 0
+      await redis.addUsageRecord(keyId, {
+        timestamp: new Date().toISOString(),
+        model,
+        accountId: accountId || null,
+        inputTokens,
+        outputTokens,
+        cacheCreateTokens,
+        cacheReadTokens,
+        totalTokens,
+        cost: Number(usageCost.toFixed(6)),
+        costBreakdown: costInfo && costInfo.costs ? costInfo.costs : undefined
+      })
+
       const logParts = [`Model: ${model}`, `Input: ${inputTokens}`, `Output: ${outputTokens}`]
       if (cacheCreateTokens > 0) {
         logParts.push(`Cache Create: ${cacheCreateTokens}`)
@@ -846,8 +883,11 @@ class ApiKeyService {
         return // 不是 Opus 模型，直接返回
       }
 
-      // 判断是否为 claude 或 claude-console 账户
-      if (!accountType || (accountType !== 'claude' && accountType !== 'claude-console')) {
+      // 判断是否为 claude、claude-console 或 ccr 账户
+      if (
+        !accountType ||
+        (accountType !== 'claude' && accountType !== 'claude-console' && accountType !== 'ccr')
+      ) {
         logger.debug(`⚠️ Skipping Opus cost recording for non-Claude account type: ${accountType}`)
         return // 不是 claude 账户，直接返回
       }
@@ -855,7 +895,9 @@ class ApiKeyService {
       // 记录 Opus 周费用
       await redis.incrementWeeklyOpusCost(keyId, cost)
       logger.database(
-        `💰 Recorded Opus weekly cost for ${keyId}: $${cost.toFixed(6)}, model: ${model}, account type: ${accountType}`
+        `💰 Recorded Opus weekly cost for ${keyId}: $${cost.toFixed(
+          6
+        )}, model: ${model}, account type: ${accountType}`
       )
     } catch (error) {
       logger.error('❌ Failed to record Opus cost:', error)
@@ -930,7 +972,9 @@ class ApiKeyService {
         // 记录详细的缓存费用（如果有）
         if (costInfo.ephemeral5mCost > 0 || costInfo.ephemeral1hCost > 0) {
           logger.database(
-            `💰 Cache costs - 5m: $${costInfo.ephemeral5mCost.toFixed(6)}, 1h: $${costInfo.ephemeral1hCost.toFixed(6)}`
+            `💰 Cache costs - 5m: $${costInfo.ephemeral5mCost.toFixed(
+              6
+            )}, 1h: $${costInfo.ephemeral1hCost.toFixed(6)}`
           )
         }
       } else {
@@ -965,6 +1009,32 @@ class ApiKeyService {
           )
         }
       }
+
+      const usageRecord = {
+        timestamp: new Date().toISOString(),
+        model,
+        accountId: accountId || null,
+        accountType: accountType || null,
+        inputTokens,
+        outputTokens,
+        cacheCreateTokens,
+        cacheReadTokens,
+        ephemeral5mTokens,
+        ephemeral1hTokens,
+        totalTokens,
+        cost: Number((costInfo.totalCost || 0).toFixed(6)),
+        costBreakdown: {
+          input: costInfo.inputCost || 0,
+          output: costInfo.outputCost || 0,
+          cacheCreate: costInfo.cacheCreateCost || 0,
+          cacheRead: costInfo.cacheReadCost || 0,
+          ephemeral5m: costInfo.ephemeral5mCost || 0,
+          ephemeral1h: costInfo.ephemeral1hCost || 0
+        },
+        isLongContext: costInfo.isLongContextRequest || false
+      }
+
+      await redis.addUsageRecord(keyId, usageRecord)
 
       const logParts = [`Model: ${model}`, `Input: ${inputTokens}`, `Output: ${outputTokens}`]
       if (cacheCreateTokens > 0) {
@@ -1007,8 +1077,24 @@ class ApiKeyService {
   }
 
   // 📈 获取使用统计
-  async getUsageStats(keyId) {
-    return await redis.getUsageStats(keyId)
+  async getUsageStats(keyId, options = {}) {
+    const usageStats = await redis.getUsageStats(keyId)
+
+    // options 可能是字符串（兼容旧接口），仅当为对象时才解析
+    const optionObject =
+      options && typeof options === 'object' && !Array.isArray(options) ? options : {}
+
+    if (optionObject.includeRecords === false) {
+      return usageStats
+    }
+
+    const recordLimit = optionObject.recordLimit || 20
+    const recentRecords = await redis.getUsageRecords(keyId, recordLimit)
+
+    return {
+      ...usageStats,
+      recentRecords
+    }
   }
 
   // 📊 获取账户使用统计
@@ -1060,6 +1146,7 @@ class ApiKeyService {
           dailyCost,
           totalCost: costStats.total,
           dailyCostLimit: parseFloat(key.dailyCostLimit || 0),
+          totalCostLimit: parseFloat(key.totalCostLimit || 0),
           userId: key.userId,
           userUsername: key.userUsername,
           createdBy: key.createdBy,
@@ -1105,7 +1192,8 @@ class ApiKeyService {
         userUsername: keyData.userUsername,
         createdBy: keyData.createdBy,
         permissions: keyData.permissions,
-        dailyCostLimit: parseFloat(keyData.dailyCostLimit || 0)
+        dailyCostLimit: parseFloat(keyData.dailyCostLimit || 0),
+        totalCostLimit: parseFloat(keyData.totalCostLimit || 0)
       }
     } catch (error) {
       logger.error('❌ Failed to get API key by ID:', error)

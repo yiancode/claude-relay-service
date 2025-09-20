@@ -259,6 +259,8 @@ router.get('/api-keys', authenticateUser, async (req, res) => {
         usage: flatUsage,
         dailyCost: key.dailyCost,
         dailyCostLimit: key.dailyCostLimit,
+        totalCost: key.totalCost,
+        totalCostLimit: key.totalCostLimit,
         // 不返回实际的key值，只返回前缀和后几位
         keyPreview: key.key
           ? `${key.key.substring(0, 8)}...${key.key.substring(key.key.length - 4)}`
@@ -288,12 +290,24 @@ router.get('/api-keys', authenticateUser, async (req, res) => {
 // 🔑 创建新的API Key
 router.post('/api-keys', authenticateUser, async (req, res) => {
   try {
-    const { name, description, tokenLimit, expiresAt, dailyCostLimit } = req.body
+    const { name, description, tokenLimit, expiresAt, dailyCostLimit, totalCostLimit } = req.body
 
     if (!name || !name.trim()) {
       return res.status(400).json({
         error: 'Missing name',
         message: 'API key name is required'
+      })
+    }
+
+    if (
+      totalCostLimit !== undefined &&
+      totalCostLimit !== null &&
+      totalCostLimit !== '' &&
+      (Number.isNaN(Number(totalCostLimit)) || Number(totalCostLimit) < 0)
+    ) {
+      return res.status(400).json({
+        error: 'Invalid total cost limit',
+        message: 'Total cost limit must be a non-negative number'
       })
     }
 
@@ -315,8 +329,10 @@ router.post('/api-keys', authenticateUser, async (req, res) => {
       tokenLimit: tokenLimit || null,
       expiresAt: expiresAt || null,
       dailyCostLimit: dailyCostLimit || null,
+      totalCostLimit: totalCostLimit || null,
       createdBy: 'user',
-      permissions: ['messages'] // 用户创建的API Key默认只有messages权限
+      // 设置服务权限为全部服务，确保前端显示“服务权限”为“全部服务”且具备完整访问权限
+      permissions: 'all'
     }
 
     const newApiKey = await apiKeyService.createApiKey(apiKeyData)
@@ -337,6 +353,7 @@ router.post('/api-keys', authenticateUser, async (req, res) => {
         tokenLimit: newApiKey.tokenLimit,
         expiresAt: newApiKey.expiresAt,
         dailyCostLimit: newApiKey.dailyCostLimit,
+        totalCostLimit: newApiKey.totalCostLimit,
         createdAt: newApiKey.createdAt
       }
     })

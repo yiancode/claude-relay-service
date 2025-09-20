@@ -114,6 +114,7 @@ router.post('/api/user-stats', async (req, res) => {
 
       // 获取当日费用统计
       const dailyCost = await redis.getDailyCost(keyId)
+      const costStats = await redis.getCostStats(keyId)
 
       // 处理数据格式，与 validateApiKey 返回的格式保持一致
       // 解析限制模型数据
@@ -140,7 +141,9 @@ router.post('/api/user-stats', async (req, res) => {
         rateLimitWindow: parseInt(keyData.rateLimitWindow) || 0,
         rateLimitRequests: parseInt(keyData.rateLimitRequests) || 0,
         dailyCostLimit: parseFloat(keyData.dailyCostLimit) || 0,
+        totalCostLimit: parseFloat(keyData.totalCostLimit) || 0,
         dailyCost: dailyCost || 0,
+        totalCost: costStats.total || 0,
         enableModelRestriction: keyData.enableModelRestriction === 'true',
         restrictedModels,
         enableClientRestriction: keyData.enableClientRestriction === 'true',
@@ -336,15 +339,15 @@ router.post('/api/user-stats', async (req, res) => {
     const responseData = {
       id: keyId,
       name: fullKeyData.name,
-      description: keyData.description || '',
+      description: fullKeyData.description || keyData.description || '',
       isActive: true, // 如果能通过validateApiKey验证，说明一定是激活的
-      createdAt: keyData.createdAt,
-      expiresAt: keyData.expiresAt,
+      createdAt: fullKeyData.createdAt || keyData.createdAt,
+      expiresAt: fullKeyData.expiresAt || keyData.expiresAt,
       // 添加激活相关字段
-      expirationMode: keyData.expirationMode || 'fixed',
-      isActivated: keyData.isActivated === 'true',
-      activationDays: parseInt(keyData.activationDays || 0),
-      activatedAt: keyData.activatedAt || null,
+      expirationMode: fullKeyData.expirationMode || 'fixed',
+      isActivated: fullKeyData.isActivated === true || fullKeyData.isActivated === 'true',
+      activationDays: parseInt(fullKeyData.activationDays || 0),
+      activatedAt: fullKeyData.activatedAt || null,
       permissions: fullKeyData.permissions,
 
       // 使用统计（使用验证结果中的完整数据）
@@ -372,11 +375,13 @@ router.post('/api/user-stats', async (req, res) => {
         rateLimitRequests: fullKeyData.rateLimitRequests || 0,
         rateLimitCost: parseFloat(fullKeyData.rateLimitCost) || 0, // 新增：费用限制
         dailyCostLimit: fullKeyData.dailyCostLimit || 0,
+        totalCostLimit: fullKeyData.totalCostLimit || 0,
         // 当前使用量
         currentWindowRequests,
         currentWindowTokens,
         currentWindowCost, // 新增：当前窗口费用
         currentDailyCost,
+        currentTotalCost: totalCost,
         // 时间窗口信息
         windowStartTime,
         windowEndTime,

@@ -20,7 +20,9 @@ function getDateInTimezone(date = new Date()) {
 function getDateStringInTimezone(date = new Date()) {
   const tzDate = getDateInTimezone(date)
   // 使用UTC方法获取偏移后的日期部分
-  return `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(2, '0')}-${String(tzDate.getUTCDate()).padStart(2, '0')}`
+  return `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(2, '0')}-${String(
+    tzDate.getUTCDate()
+  ).padStart(2, '0')}`
 }
 
 // 获取配置时区的小时 (0-23)
@@ -219,7 +221,10 @@ class RedisClient {
     const now = new Date()
     const today = getDateStringInTimezone(now)
     const tzDate = getDateInTimezone(now)
-    const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(2, '0')}`
+    const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(
+      2,
+      '0'
+    )}`
     const currentHour = `${today}:${String(getHourInTimezone(now)).padStart(2, '0')}` // 新增小时级别
 
     const daily = `usage:daily:${keyId}:${today}`
@@ -414,7 +419,10 @@ class RedisClient {
     const now = new Date()
     const today = getDateStringInTimezone(now)
     const tzDate = getDateInTimezone(now)
-    const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(2, '0')}`
+    const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(
+      2,
+      '0'
+    )}`
     const currentHour = `${today}:${String(getHourInTimezone(now)).padStart(2, '0')}`
 
     // 账户级别统计的键
@@ -551,7 +559,10 @@ class RedisClient {
     const today = getDateStringInTimezone()
     const dailyKey = `usage:daily:${keyId}:${today}`
     const tzDate = getDateInTimezone()
-    const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(2, '0')}`
+    const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(
+      2,
+      '0'
+    )}`
     const monthlyKey = `usage:monthly:${keyId}:${currentMonth}`
 
     const [total, daily, monthly] = await Promise.all([
@@ -636,6 +647,48 @@ class RedisClient {
     }
   }
 
+  async addUsageRecord(keyId, record, maxRecords = 200) {
+    const listKey = `usage:records:${keyId}`
+    const client = this.getClientSafe()
+
+    try {
+      await client
+        .multi()
+        .lpush(listKey, JSON.stringify(record))
+        .ltrim(listKey, 0, Math.max(0, maxRecords - 1))
+        .expire(listKey, 86400 * 90) // 默认保留90天
+        .exec()
+    } catch (error) {
+      logger.error(`❌ Failed to append usage record for key ${keyId}:`, error)
+    }
+  }
+
+  async getUsageRecords(keyId, limit = 50) {
+    const listKey = `usage:records:${keyId}`
+    const client = this.getClient()
+
+    if (!client) {
+      return []
+    }
+
+    try {
+      const rawRecords = await client.lrange(listKey, 0, Math.max(0, limit - 1))
+      return rawRecords
+        .map((entry) => {
+          try {
+            return JSON.parse(entry)
+          } catch (error) {
+            logger.warn('⚠️ Failed to parse usage record entry:', error)
+            return null
+          }
+        })
+        .filter(Boolean)
+    } catch (error) {
+      logger.error(`❌ Failed to load usage records for key ${keyId}:`, error)
+      return []
+    }
+  }
+
   // 💰 获取当日费用
   async getDailyCost(keyId) {
     const today = getDateStringInTimezone()
@@ -652,7 +705,10 @@ class RedisClient {
   async incrementDailyCost(keyId, amount) {
     const today = getDateStringInTimezone()
     const tzDate = getDateInTimezone()
-    const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(2, '0')}`
+    const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(
+      2,
+      '0'
+    )}`
     const currentHour = `${today}:${String(getHourInTimezone(new Date())).padStart(2, '0')}`
 
     const dailyKey = `usage:cost:daily:${keyId}:${today}`
@@ -682,7 +738,10 @@ class RedisClient {
   async getCostStats(keyId) {
     const today = getDateStringInTimezone()
     const tzDate = getDateInTimezone()
-    const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(2, '0')}`
+    const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(
+      2,
+      '0'
+    )}`
     const currentHour = `${today}:${String(getHourInTimezone(new Date())).padStart(2, '0')}`
 
     const [daily, monthly, hourly, total] = await Promise.all([
@@ -780,12 +839,15 @@ class RedisClient {
   }
 
   // 📊 获取账户使用统计
-  async getAccountUsageStats(accountId) {
+  async getAccountUsageStats(accountId, accountType = null) {
     const accountKey = `account_usage:${accountId}`
     const today = getDateStringInTimezone()
     const accountDailyKey = `account_usage:daily:${accountId}:${today}`
     const tzDate = getDateInTimezone()
-    const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(2, '0')}`
+    const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(
+      2,
+      '0'
+    )}`
     const accountMonthlyKey = `account_usage:monthly:${accountId}:${currentMonth}`
 
     const [total, daily, monthly] = await Promise.all([
@@ -794,8 +856,25 @@ class RedisClient {
       this.client.hgetall(accountMonthlyKey)
     ])
 
-    // 获取账户创建时间来计算平均值
-    const accountData = await this.client.hgetall(`claude_account:${accountId}`)
+    // 获取账户创建时间来计算平均值 - 支持不同类型的账号
+    let accountData = {}
+    if (accountType === 'openai') {
+      accountData = await this.client.hgetall(`openai:account:${accountId}`)
+    } else if (accountType === 'openai-responses') {
+      accountData = await this.client.hgetall(`openai_responses_account:${accountId}`)
+    } else {
+      // 尝试多个前缀
+      accountData = await this.client.hgetall(`claude_account:${accountId}`)
+      if (!accountData.createdAt) {
+        accountData = await this.client.hgetall(`openai:account:${accountId}`)
+      }
+      if (!accountData.createdAt) {
+        accountData = await this.client.hgetall(`openai_responses_account:${accountId}`)
+      }
+      if (!accountData.createdAt) {
+        accountData = await this.client.hgetall(`openai_account:${accountId}`)
+      }
+    }
     const createdAt = accountData.createdAt ? new Date(accountData.createdAt) : new Date()
     const now = new Date()
     const daysSinceCreated = Math.max(1, Math.ceil((now - createdAt) / (1000 * 60 * 60 * 24)))
@@ -1404,14 +1483,18 @@ class RedisClient {
       if (remainingTTL < renewalThreshold) {
         await this.client.expire(key, fullTTL)
         logger.debug(
-          `🔄 Renewed sticky session TTL: ${sessionHash} (was ${Math.round(remainingTTL / 60)}min, renewed to ${ttlHours}h)`
+          `🔄 Renewed sticky session TTL: ${sessionHash} (was ${Math.round(
+            remainingTTL / 60
+          )}min, renewed to ${ttlHours}h)`
         )
         return true
       }
 
       // 剩余时间充足，无需续期
       logger.debug(
-        `✅ Sticky session TTL sufficient: ${sessionHash} (remaining ${Math.round(remainingTTL / 60)}min)`
+        `✅ Sticky session TTL sufficient: ${sessionHash} (remaining ${Math.round(
+          remainingTTL / 60
+        )}min)`
       )
       return true
     } catch (error) {
@@ -1700,6 +1783,42 @@ class RedisClient {
 }
 
 const redisClient = new RedisClient()
+
+// 分布式锁相关方法
+redisClient.setAccountLock = async function (lockKey, lockValue, ttlMs) {
+  try {
+    // 使用SET NX EX实现原子性的锁获取
+    const result = await this.client.set(lockKey, lockValue, {
+      NX: true, // 只在键不存在时设置
+      PX: ttlMs // 毫秒级过期时间
+    })
+    return result === 'OK'
+  } catch (error) {
+    logger.error(`Failed to acquire lock ${lockKey}:`, error)
+    return false
+  }
+}
+
+redisClient.releaseAccountLock = async function (lockKey, lockValue) {
+  try {
+    // 使用Lua脚本确保只有持有锁的进程才能释放锁
+    const script = `
+      if redis.call("get", KEYS[1]) == ARGV[1] then
+        return redis.call("del", KEYS[1])
+      else
+        return 0
+      end
+    `
+    const result = await this.client.eval(script, {
+      keys: [lockKey],
+      arguments: [lockValue]
+    })
+    return result === 1
+  } catch (error) {
+    logger.error(`Failed to release lock ${lockKey}:`, error)
+    return false
+  }
+}
 
 // 导出时区辅助函数
 redisClient.getDateInTimezone = getDateInTimezone

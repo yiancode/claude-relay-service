@@ -19,6 +19,7 @@ const webRoutes = require('./routes/web')
 const apiStatsRoutes = require('./routes/apiStats')
 const geminiRoutes = require('./routes/geminiRoutes')
 const openaiGeminiRoutes = require('./routes/openaiGeminiRoutes')
+const standardGeminiRoutes = require('./routes/standardGeminiRoutes')
 const openaiClaudeRoutes = require('./routes/openaiClaudeRoutes')
 const openaiRoutes = require('./routes/openaiRoutes')
 const userRoutes = require('./routes/userRoutes')
@@ -34,6 +35,7 @@ const {
   globalRateLimit,
   requestSizeLimit
 } = require('./middleware/auth')
+const { browserFallbackMiddleware } = require('./middleware/browserFallback')
 
 class Application {
   constructor() {
@@ -108,6 +110,9 @@ class Application {
       } else {
         this.app.use(corsMiddleware)
       }
+
+      // 🆕 兜底中间件：处理Chrome插件兼容性（必须在认证之前）
+      this.app.use(browserFallbackMiddleware)
 
       // 📦 压缩 - 排除流式响应（SSE）
       this.app.use(
@@ -227,7 +232,9 @@ class Application {
       // 使用 web 路由（包含 auth 和页面重定向）
       this.app.use('/web', webRoutes)
       this.app.use('/apiStats', apiStatsRoutes)
-      this.app.use('/gemini', geminiRoutes)
+      // Gemini 路由：同时支持标准格式和原有格式
+      this.app.use('/gemini', standardGeminiRoutes) // 标准 Gemini API 格式路由
+      this.app.use('/gemini', geminiRoutes) // 保留原有路径以保持向后兼容
       this.app.use('/openai/gemini', openaiGeminiRoutes)
       this.app.use('/openai/claude', openaiClaudeRoutes)
       this.app.use('/openai', openaiRoutes)
@@ -554,7 +561,7 @@ class Application {
     logger.info(
       `🔄 Cleanup tasks scheduled every ${config.system.cleanupInterval / 1000 / 60} minutes`
     )
-    
+
     // 🚨 启动限流状态自动清理服务
     // 每5分钟检查一次过期的限流状态，确保账号能及时恢复调度
     const rateLimitCleanupService = require('./services/rateLimitCleanupService')
@@ -580,7 +587,7 @@ class Application {
           } catch (error) {
             logger.error('❌ Error cleaning up pricing service:', error)
           }
-          
+
           // 停止限流清理服务
           try {
             const rateLimitCleanupService = require('./services/rateLimitCleanupService')
